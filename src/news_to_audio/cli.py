@@ -204,7 +204,7 @@ Comandi disponibili:
 def main() -> None:
     output_dir = load_output_dir()
     _print("Podcast All CLI")
-    _print("Digita /help per i comandi. URL e file restano in lista finché MP3, TXT e MD non sono completi.")
+    _print("Digita /help per i comandi. Gli elementi restano in lista finché i file di output richiesti non sono completi.")
     while True:
         try:
             line = input("\npodcast-all › ").strip()

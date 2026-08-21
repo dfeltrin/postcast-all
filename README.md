@@ -1,15 +1,15 @@
 # Podcast All
 
-Agente locale con due operazioni distinte: avvia un Audio Overview da un URL e,
-in un secondo momento, scarica gli audio già pronti dai notebook esistenti.
-Per ogni MP3 scaricato viene creato anche un file `.txt` omonimo, contenente
-l'URL della fonte originale. I file MP3, TXT e Markdown vengono creati insieme
-soltanto dopo il download riuscito dell'audio; solo allora il notebook
-viene rinominato con il prefisso `[DONE]` e non verra' scaricato di nuovo.
+Agente locale per creare Audio Overview in NotebookLM a partire da URL o file
+locali, mantenendo una coda persistente. Un elemento viene rimosso dalla coda
+solo dopo il download riuscito dell'audio.
+
+- Per un URL crea MP3, TXT (URL della fonte) e Markdown (testo estratto).
+- Per un file locale crea MP3 e TXT (percorso assoluto del file); non crea Markdown.
 
 ## Prerequisiti
 
-- Python 3.11+
+- Python 3.10+
 - Un account Google con accesso a [NotebookLM](https://notebooklm.google.com/)
 - Il diritto di riprodurre/elaborare la fonte indicata
 
@@ -22,75 +22,50 @@ pip install -e '.[dev]'
 playwright install chromium
 ```
 
-## Uso
-
-```bash
-news-to-audio 'https://example.com/articolo' \
-  --output-dir ~/Downloads/AudioOverview \
-  --language Italian \
-  --prompt 'Spiega i concetti chiave in modo chiaro e concreto.'
-```
-
-Il comando crea il notebook, importa l'URL e avvia la generazione senza restare
-in attesa del risultato. Per scaricare gli Audio Overview disponibili in seguito:
-
-```bash
-news-to-audio-download --output-dir ./AudioOverview
-```
-
-## Interfaccia grafica
-
-Per avviare l'interfaccia, dopo l'installazione esegui:
-
-```bash
-news-to-audio-ui
-```
-
-In alternativa, dalla cartella del progetto puoi usare:
+## Avvio
 
 ```bash
 ./go.sh
 ```
 
-Inserisci l'URL e il **titolo obbligatorio**, scegli la cartella di destinazione e premi **Crea audio**.
-Il titolo viene usato per il notebook, il file di testo e l'MP3.
-L'app aggiunge automaticamente la data corrente nel formato `YYYY.MM.DD` e
-rimuove i caratteri non consentiti nei nomi file.
-L'app rimane utilizzabile durante l'estrazione e apre NotebookLM al momento
-opportuno. Per impostazione predefinita i file vengono salvati in
-`./AudioOverview`, rispetto alla cartella dalla quale avvii la UI.
+In alternativa, dopo l'installazione:
 
-Al primo avvio si apre Chromium: accedi a Google **manualmente**. La sessione e'
-conservata in `state/browser-profile`, quindi gli avvii successivi non richiedono
-normalmente un nuovo accesso.
+```bash
+news-to-audio
+```
 
-L'agente salva anche il testo estratto nella directory di output (`.md`): e' utile
-come traccia, per verificare la fonte e per ritentare l'operazione senza scaricarla
-di nuovo. Nel flusso NotebookLM l'agente seleziona **Testo copiato** e importa il testo
-estratto, preceduto dall'URL originale: questo evita i blocchi dei siti che non consentono
-al crawler di NotebookLM di aprire direttamente la pagina.
-fornito. Per completare in modo automatico usa il flusso desktop NotebookLM;
-l'app mobile conserva invece gli audio solo offline e non come file esportabile.
-L'agente attende fino a 200 minuti per la generazione prima di segnalare un timeout.
+Al primo avvio si apre Chromium: accedi a Google **manualmente**. La sessione è
+conservata in `state/browser-profile`, quindi gli avvii successivi normalmente
+non richiedono un nuovo accesso.
 
-### Coda da terminale
+## Coda da terminale
 
-Nel terminale interattivo, `/addfile` apre il selettore di sistema per scegliere
-un file dal disco. Il file viene accodato insieme agli URL: `/sync` lo carica in
-NotebookLM solo quando raggiunge il proprio turno. Se il file viene spostato o
-eliminato prima di quel momento, resta in coda e viene segnalato come non trovato.
-Usa `/removeall` (oppure `/r`) per svuotare completamente la coda.
+Comandi principali:
+
+- `/add <url>` oppure `/a <url>`: aggiunge un URL alla coda.
+- `/addfile` oppure `/af`: apre il selettore di sistema e aggiunge un file locale.
+- `/list` oppure `/l`: mostra URL e file in attesa.
+- `/sync` oppure `/s`: elabora la coda nell'ordine di inserimento.
+- `/removeall` oppure `/r`: svuota completamente la coda.
+- `/rejected`: mostra gli URL scartati automaticamente.
+- `/output [cartella]` oppure `/o [cartella]`: mostra o imposta la cartella di output.
+
+Con `/addfile` il file viene memorizzato in coda insieme agli URL, non inviato
+subito a NotebookLM. Durante `/sync`, il file viene caricato solo quando arriva
+il suo turno. L'app attende il completamento del caricamento e dell'analisi
+(spinner incluso) prima di avviare l'Audio Overview.
+
+Se il file viene spostato o eliminato prima dell'elaborazione, rimane in coda e
+la sincronizzazione si ferma senza ritentare in loop. Dopo aver corretto il
+problema, esegui di nuovo `/sync`: l'app riprende il notebook già creato.
 
 ## Formati
 
-Gestisce HTML, PDF, TXT/MD, DOCX, PPTX e CSV scaricabili via URL. Per gli altri
-file o per contenuti protetti da login/paywall, l'esecuzione si interrompe con un
-messaggio esplicito: non tenta di aggirare protezioni.
+Per gli URL gestisce HTML, PDF, TXT/MD, DOCX, PPTX e CSV scaricabili. Per i file
+locali seleziona un formato supportato dal tuo account NotebookLM. I contenuti
+protetti da login/paywall non vengono aggirati.
 
-## Limiti operativi
+## Diagnostica
 
-NotebookLM non offre un'API pubblica per creare/scaricare gli Audio Overview.
-L'ultimo tratto e' quindi automazione del browser e l'interfaccia di Google puo'
-cambiare: i selettori, raccolti in `notebooklm.py`, sono volutamente isolati e
-facili da aggiornare. In caso di errore vengono salvati screenshot e HTML in
-`output/.debug`.
+L'interazione con NotebookLM avviene nel browser. In caso di errore vengono
+salvati screenshot e HTML in `output/.debug`.
