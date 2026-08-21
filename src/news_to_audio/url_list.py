@@ -1,4 +1,4 @@
-"""A small, human-editable queue of URLs waiting to be processed."""
+"""A small, human-editable queue of URLs and local files waiting to be processed."""
 
 from __future__ import annotations
 
@@ -37,6 +37,15 @@ def add_url(url: str, list_file: Path = URL_LIST_FILE) -> bool:
     with list_file.open("a", encoding="utf-8") as handle:
         handle.write(f"{url}\n")
     return True
+
+
+def add_file(path: Path, list_file: Path = URL_LIST_FILE) -> bool:
+    """Append a local file to the same FIFO queue used by URLs.
+
+    File entries are stored as absolute ``file://`` URIs.  This keeps the queue
+    plain text and preserves the order in which URLs and files were added.
+    """
+    return add_url(path.expanduser().resolve().as_uri(), list_file)
 
 
 def first_url(list_file: Path = URL_LIST_FILE) -> str | None:
@@ -82,6 +91,17 @@ def remove_url(url: str, list_file: Path = URL_LIST_FILE) -> bool:
     if removed:
         list_file.write_text("".join(kept), encoding="utf-8")
     return removed
+
+
+def remove_all(list_file: Path = URL_LIST_FILE) -> int:
+    """Remove every entry and comment from the queue, returning its prior size."""
+    previous_count = count_urls(list_file)
+    try:
+        list_file.parent.mkdir(parents=True, exist_ok=True)
+        list_file.write_text("", encoding="utf-8")
+    except OSError:
+        return 0
+    return previous_count
 
 
 def discard_url(

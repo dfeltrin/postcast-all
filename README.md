@@ -73,6 +73,14 @@ fornito. Per completare in modo automatico usa il flusso desktop NotebookLM;
 l'app mobile conserva invece gli audio solo offline e non come file esportabile.
 L'agente attende fino a 200 minuti per la generazione prima di segnalare un timeout.
 
+### Coda da terminale
+
+Nel terminale interattivo, `/addfile` apre il selettore di sistema per scegliere
+un file dal disco. Il file viene accodato insieme agli URL: `/sync` lo carica in
+NotebookLM solo quando raggiunge il proprio turno. Se il file viene spostato o
+eliminato prima di quel momento, resta in coda e viene segnalato come non trovato.
+Usa `/removeall` (oppure `/r`) per svuotare completamente la coda.
+
 ## Formati
 
 Gestisce HTML, PDF, TXT/MD, DOCX, PPTX e CSV scaricabili via URL. Per gli altri

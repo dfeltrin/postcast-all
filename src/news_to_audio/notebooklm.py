@@ -18,6 +18,8 @@ TEXT_LIMIT = 300_000
 GENERATION_TIMEOUT_MS = 12_000_000
 GENERATION_POLL_MS = 30_000
 MAX_CLEAN_RECREATION_ATTEMPTS = 2
+FILE_UPLOAD_TIMEOUT_SECONDS = 20 * 60
+FILE_UPLOAD_POLL_MS = 2_000
 SOURCE_INDEX_NAME = ".source-urls.json"
 SOURCE_REGISTRY = Path("state/source-urls.json")
 NOTEBOOK_JOBS_FILE = Path("state/notebook-jobs.json")
@@ -187,8 +189,13 @@ def _audio_candidates(destination: Path, title: str) -> list[Path]:
     return sorted((path for path in destination.glob("*.mp3") if pattern.match(path.name)), key=lambda path: path.stat().st_mtime)
 
 
-def _is_complete_audio(audio_file: Path) -> bool:
-    return audio_file.is_file() and audio_file.stat().st_size > 0 and audio_file.with_suffix(".txt").is_file() and audio_file.with_suffix(".md").is_file()
+def _is_complete_audio(audio_file: Path, include_markdown: bool = True) -> bool:
+    return (
+        audio_file.is_file()
+        and audio_file.stat().st_size > 0
+        and audio_file.with_suffix(".txt").is_file()
+        and (not include_markdown or audio_file.with_suffix(".md").is_file())
+    )
 
 
 def _next_audio_path(destination: Path, title: str) -> Path:
@@ -200,7 +207,9 @@ def _next_audio_path(destination: Path, title: str) -> Path:
     return output
 
 
-def _publish_audio_bundle(staged_audio: Path, destination: Path, title: str, url: str, text: str) -> Path:
+def _publish_audio_bundle(
+    staged_audio: Path, destination: Path, title: str, url: str, text: str, include_markdown: bool = True,
+) -> Path:
     """Publish an MP3 and its source files as one recoverable local transaction.
 
     A directory cannot atomically rename three individual files.  We therefore stage
@@ -210,16 +219,15 @@ def _publish_audio_bundle(staged_audio: Path, destination: Path, title: str, url
     """
     output = _next_audio_path(destination, title)
     staged_txt = staged_audio.with_suffix(".txt")
-    staged_md = staged_audio.with_suffix(".md")
     _write_text_atomically(staged_txt, f"{url}\n")
-    _write_text_atomically(staged_md, f"# {title}\n\nFonte: {url}\n\n{text}\n")
+    staged_files = [(staged_audio, output), (staged_txt, output.with_suffix(".txt"))]
+    if include_markdown:
+        staged_md = staged_audio.with_suffix(".md")
+        _write_text_atomically(staged_md, f"# {title}\n\nFonte: {url}\n\n{text}\n")
+        staged_files.append((staged_md, output.with_suffix(".md")))
     published: list[Path] = []
     try:
-        for source, target in (
-            (staged_audio, output),
-            (staged_txt, output.with_suffix(".txt")),
-            (staged_md, output.with_suffix(".md")),
-        ):
+        for source, target in staged_files:
             os.replace(source, target)
             published.append(target)
     except Exception:
@@ -229,19 +237,24 @@ def _publish_audio_bundle(staged_audio: Path, destination: Path, title: str, url
     return output
 
 
-def _publish_missing_sidecars(audio_file: Path, title: str, url: str, text: str) -> None:
+def _publish_missing_sidecars(
+    audio_file: Path, title: str, url: str, text: str, include_markdown: bool = True,
+) -> None:
     """Finish a bundle left by an older version which saved only the MP3."""
-    if audio_file.with_suffix(".txt").exists() or audio_file.with_suffix(".md").exists():
+    if audio_file.with_suffix(".txt").exists() or (include_markdown and audio_file.with_suffix(".md").exists()):
         raise NotebookLMError(f"File associati incompleti per: {audio_file.name}")
     staging = audio_file.parent / f".audio-overview-pending-{uuid4().hex}"
     staging.mkdir()
     staged_txt = staging / audio_file.with_suffix(".txt").name
-    staged_md = staging / audio_file.with_suffix(".md").name
     published: list[Path] = []
     try:
         _write_text_atomically(staged_txt, f"{url}\n")
-        _write_text_atomically(staged_md, f"# {title}\n\nFonte: {url}\n\n{text}\n")
-        for source, target in ((staged_txt, audio_file.with_suffix(".txt")), (staged_md, audio_file.with_suffix(".md"))):
+        staged_files = [(staged_txt, audio_file.with_suffix(".txt"))]
+        if include_markdown:
+            staged_md = staging / audio_file.with_suffix(".md").name
+            _write_text_atomically(staged_md, f"# {title}\n\nFonte: {url}\n\n{text}\n")
+            staged_files.append((staged_md, audio_file.with_suffix(".md")))
+        for source, target in staged_files:
             os.replace(source, target)
             published.append(target)
     except Exception:
@@ -344,6 +357,141 @@ def _add_copied_text(
     # Import labels vary between NotebookLM releases and account languages.
     _click_first(page, ["insert", "inserisci", "add", "aggiungi", "import", "importa"])
     sleep(3)
+
+
+def _add_local_file(
+    page: Page, title: str, file_path: Path, on_status: Callable[[str], None],
+    on_notebook_created: Callable[[], None] | None = None,
+) -> None:
+    """Create a notebook and import one local file through NotebookLM's uploader."""
+    on_status("Creazione del notebook e caricamento del file locale…")
+    _click_first(page, ["new notebook", "nuovo notebook", "crea nuovo"])
+    if on_notebook_created:
+        on_notebook_created()
+    page.wait_for_timeout(750)
+    _raise_if_daily_limit(page)
+    _set_notebook_title(page, title)
+    on_status(f"Notebook creato con titolo: {title}")
+    add_source_button = page.locator("button.add-source-button")
+    add_source_button.wait_for(state="visible", timeout=20_000)
+    add_source_button.evaluate("button => button.click()")
+    page.wait_for_timeout(500)
+
+    upload_button = page.locator("button.drop-zone-icon-button").filter(
+        has_text=re.compile(r"carica.*file|upload.*file|file.*upload", re.I)
+    ).last
+    try:
+        upload_button.wait_for(state="visible", timeout=10_000)
+        # Intercept the native chooser at the click that opens it.  Looking for
+        # an input afterwards is too late: on macOS the system picker may then
+        # be modal and require manual interaction.
+        with page.expect_file_chooser(timeout=10_000) as chooser_info:
+            upload_button.click(force=True, no_wait_after=True)
+        chooser_info.value.set_files(str(file_path), timeout=10_000)
+    except PlaywrightTimeoutError as exc:
+        raise NotebookLMError("Opzione per caricare un file non trovata in NotebookLM.") from exc
+    on_status(f"File caricato in NotebookLM: {file_path.name}")
+
+
+def _wait_for_local_file_ready(page: Page, file_path: Path, on_status: Callable[[str], None]) -> None:
+    """Wait until the uploaded source is visible and no longer being processed.
+
+    Selecting a file only confirms that the browser handed it to NotebookLM; the
+    service can still spend several minutes uploading and indexing it.  Starting
+    an Audio Overview before this finishes produces incomplete or failed audio.
+    """
+    source_name = re.compile(re.escape(file_path.name), re.I)
+    busy = re.compile(r"caricamento|carica in corso|elaborazione|indicizz|uploading|processing|indexing", re.I)
+    failed = re.compile(r"errore|non (?:è|e') stato possibile|failed|unsupported|non supportato", re.I)
+    deadline = monotonic() + FILE_UPLOAD_TIMEOUT_SECONDS
+    ready_checks = 0
+    reported_wait = False
+    while monotonic() < deadline:
+        _raise_if_daily_limit(page)
+        visible_source = None
+        labels = page.get_by_text(source_name)
+        for index in range(labels.count() - 1, -1, -1):
+            candidate = labels.nth(index)
+            try:
+                if candidate.is_visible():
+                    visible_source = candidate
+                    break
+            except PlaywrightTimeoutError:
+                continue
+        if visible_source is None:
+            ready_checks = 0
+        else:
+            # NotebookLM puts the progress label next to the filename.  Inspect
+            # its nearby containers rather than the whole page, which may show
+            # unrelated background activity.
+            nearby_text = ""
+            container = visible_source
+            for _ in range(4):
+                try:
+                    nearby_text += " " + container.inner_text(timeout=1_000)
+                    container = container.locator("xpath=..")
+                except PlaywrightTimeoutError:
+                    break
+            if failed.search(nearby_text):
+                raise NotebookLMError(f"NotebookLM non ha potuto analizzare il file: {file_path.name}")
+            spinner_visible = visible_source.evaluate(
+                """element => {
+                    const spinnerSelector = [
+                      'mat-spinner', 'mat-progress-spinner', '.mat-mdc-progress-spinner',
+                      '[role="progressbar"]', '[aria-busy="true"]', '.loading-spinner',
+                      '.loading-indicator', '.spinner'
+                    ].join(', ');
+                    let node = element;
+                    for (let level = 0; node && level < 5; level += 1, node = node.parentElement) {
+                      // Do not climb as far as the whole page: unrelated work in
+                      // another notebook panel must not block this source.
+                      if ((node.innerText || '').length > 1500) break;
+                      for (const spinner of node.querySelectorAll(spinnerSelector)) {
+                        const style = window.getComputedStyle(spinner);
+                        if (style.display !== 'none' && style.visibility !== 'hidden'
+                            && spinner.getClientRects().length) return true;
+                      }
+                    }
+                    return false;
+                }"""
+            )
+            if not spinner_visible:
+                # Some NotebookLM releases render the source spinner in a
+                # sibling overlay instead of inside the source card.  It is
+                # still a visible progress indicator on this notebook page, so
+                # treat it as pending rather than risk starting the audio early.
+                page_spinners = page.locator(
+                    'mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, '
+                    '[role="progressbar"], [aria-busy="true"], .loading-spinner, '
+                    '.loading-indicator, .spinner, mat-icon'
+                )
+                for index in range(page_spinners.count()):
+                    candidate = page_spinners.nth(index)
+                    try:
+                        if not candidate.is_visible():
+                            continue
+                        label = " ".join((candidate.inner_text(timeout=500), candidate.get_attribute("class") or ""))
+                        if candidate.evaluate("element => element.matches('mat-icon')"):
+                            if not re.search(r"progress|loading|autorenew|hourglass", label, re.I):
+                                continue
+                        spinner_visible = True
+                        break
+                    except PlaywrightTimeoutError:
+                        continue
+            if spinner_visible or busy.search(nearby_text):
+                ready_checks = 0
+            else:
+                # Require three consecutive checks: the filename can appear while
+                # the upload UI is still transitioning to its progress state.
+                ready_checks += 1
+                if ready_checks >= 3:
+                    on_status(f"Caricamento e analisi completati: {file_path.name}")
+                    return
+        if not reported_wait:
+            on_status(f"Attendo il completamento del caricamento in NotebookLM: {file_path.name}…")
+            reported_wait = True
+        page.wait_for_timeout(FILE_UPLOAD_POLL_MS)
+    raise NotebookLMError(f"Caricamento o analisi del file non completati entro 20 minuti: {file_path.name}")
 
 
 def _set_notebook_title(page: Page, title: str) -> None:
@@ -742,6 +890,96 @@ def process_url_to_completion(
     raise NotebookLMError(f"Elaborazione non completata dopo {MAX_CLEAN_RECREATION_ATTEMPTS} tentativi: {last_error}")
 
 
+def process_file_to_completion(
+    file_path: Path, output_dir: Path, profile_dir: Path,
+    language: str = "Italian", prompt: str | None = None,
+    on_status: Callable[[str], None] | None = None,
+) -> Path:
+    """Upload a queued local file, then create, download and finalize its audio."""
+    file_path = file_path.expanduser().resolve()
+    if not file_path.is_file():
+        raise FileNotFoundError(f"File locale non trovato: {file_path}")
+    # Keep the full filesystem path in the user-facing TXT/MD sidecars.  The
+    # file URI remains an internal, stable key for the notebook retry registry.
+    source_ref = str(file_path)
+    job_key = file_path.as_uri()
+    source_text = f"File locale caricato in NotebookLM: {file_path.name}\nPercorso: {file_path}"
+    title = normalize_title(file_path.stem)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    record_source_url(output_dir, title, source_ref, source_text)
+    report = on_status or print
+    last_error: Exception | None = None
+    for attempt in range(1, MAX_CLEAN_RECREATION_ATTEMPTS + 1):
+        with sync_playwright() as playwright:
+            context = playwright.chromium.launch_persistent_context(
+                user_data_dir=profile_dir, headless=False, accept_downloads=True, downloads_path=output_dir
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            created = False
+            published_audio: Path | None = None
+
+            def mark_created() -> None:
+                nonlocal created
+                created = True
+                _remember_notebook_job(job_key, title, "created")
+
+            try:
+                report(f"Elaborazione completa di {file_path.name} ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
+                _wait_for_signin_or_home(page, report)
+                jobs = _load_notebook_jobs()
+                saved = jobs.get(_url_key(job_key), {})
+                retry_title = saved.get("title") if isinstance(saved, dict) else None
+                target_title = retry_title or title
+                existing = next(((name, href) for name, href in _home_notebooks(page) if name == target_title), None)
+                if existing is not None:
+                    report(f"Notebook del file già creato trovato, riprendo: {target_title}")
+                    _open_notebook(page, existing[0], existing[1])
+                    page.wait_for_timeout(750)
+                if existing is None:
+                    _add_local_file(page, title, file_path, report, on_notebook_created=mark_created)
+                if _has_audio_overview(page):
+                    report("Audio Overview già presente: attendo il completamento.")
+                else:
+                    _wait_for_local_file_ready(page, file_path, report)
+                    _start_audio_generation(page, language, prompt, report)
+                _wait_for_audio_ready(page, title, report)
+                staged_audio = _save_ready_audio(page, title, output_dir, report)
+                try:
+                    published_audio = _publish_audio_bundle(
+                        staged_audio, output_dir, title, source_ref, source_text, include_markdown=False
+                    )
+                finally:
+                    shutil.rmtree(staged_audio.parent, ignore_errors=True)
+                _mark_notebook_done(page, title, report)
+                _remember_notebook_job(job_key, title, "completed")
+                return published_audio
+            except NotebookLMDailyLimitError:
+                if created:
+                    try:
+                        if _delete_notebook_by_title(page, title, report):
+                            _forget_notebook_job(job_key)
+                    except Exception:
+                        pass
+                raise
+            except Exception as exc:
+                last_error = exc
+                if published_audio is not None:
+                    for path in (published_audio, published_audio.with_suffix(".txt"), published_audio.with_suffix(".md")):
+                        path.unlink(missing_ok=True)
+                if created:
+                    try:
+                        if not _delete_notebook_by_title(page, title, report):
+                            raise NotebookLMError(f"Notebook da ricreare non trovato: {title}") from exc
+                        _forget_notebook_job(job_key)
+                    except Exception as cleanup_exc:
+                        raise NotebookLMError(f"Errore per {file_path.name}; pulizia del notebook non riuscita: {cleanup_exc}") from exc
+                if attempt < MAX_CLEAN_RECREATION_ATTEMPTS:
+                    report(f"Errore per {file_path.name}; notebook rimosso. Ricreazione pulita ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
+            finally:
+                context.close()
+    raise NotebookLMError(f"Elaborazione del file non completata dopo {MAX_CLEAN_RECREATION_ATTEMPTS} tentativi: {last_error}")
+
+
 def download_ready_audios(
     output_dir: Path, profile_dir: Path, on_status: Callable[[str], None] | None = None,
 ) -> tuple[list[Path], int]:
@@ -794,16 +1032,20 @@ def download_ready_audios(
 
                     # If an earlier run downloaded an MP3 but stopped before the
                     # sidecars/rename, repair it without downloading a duplicate.
+                    source_url = _source_url(output_dir, title)
+                    source_text = _source_text(output_dir, title)
+                    is_local_file = bool(source_url and Path(source_url).is_absolute())
                     candidates = _audio_candidates(output_dir, title)
-                    complete_audio = next((item for item in reversed(candidates) if _is_complete_audio(item)), None)
+                    complete_audio = next(
+                        (item for item in reversed(candidates) if _is_complete_audio(item, include_markdown=not is_local_file)),
+                        None,
+                    )
                     if complete_audio is not None:
                         _mark_notebook_done(page, title, report)
                         downloaded.append(complete_audio)
                         report(f"File gia' completi, notebook aggiornato: {title}")
                         continue
 
-                    source_url = _source_url(output_dir, title)
-                    source_text = _source_text(output_dir, title)
                     if not source_url or source_text is None:
                         raise NotebookLMError(f"Dati sorgente non disponibili per: {title}")
 
@@ -811,7 +1053,9 @@ def download_ready_audios(
                     # attempting a new browser download.
                     if candidates:
                         audio_file = candidates[-1]
-                        _publish_missing_sidecars(audio_file, title, source_url, source_text)
+                        _publish_missing_sidecars(
+                            audio_file, title, source_url, source_text, include_markdown=not is_local_file
+                        )
                         _mark_notebook_done(page, title, report)
                         downloaded.append(audio_file)
                         report(f"MP3 precedente completato: {title}")
@@ -819,7 +1063,9 @@ def download_ready_audios(
 
                     staged_audio = _save_download(page, title, output_dir, report)
                     try:
-                        audio_file = _publish_audio_bundle(staged_audio, output_dir, title, source_url, source_text)
+                        audio_file = _publish_audio_bundle(
+                            staged_audio, output_dir, title, source_url, source_text, include_markdown=not is_local_file
+                        )
                     finally:
                         shutil.rmtree(staged_audio.parent, ignore_errors=True)
                     _mark_notebook_done(page, title, report)

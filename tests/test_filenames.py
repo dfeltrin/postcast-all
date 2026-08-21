@@ -18,7 +18,7 @@ from news_to_audio.notebooklm import (
     normalize_title,
     record_source_url,
 )
-from news_to_audio.url_list import active_urls, add_url, count_urls, discard_url, first_url, remove_url
+from news_to_audio.url_list import active_urls, add_file, add_url, count_urls, discard_url, first_url, remove_all, remove_url
 
 
 def test_download_name_preserves_the_notebook_title() -> None:
@@ -34,6 +34,15 @@ def test_url_sidecar_uses_the_same_name_as_the_audio(tmp_path) -> None:
     markdown = _write_source_md(audio, "Titolo", _source_url(tmp_path, "Titolo") or "", _source_text(tmp_path, "Titolo") or "")
     assert markdown.name == "Titolo.md"
     assert "Testo della fonte" in markdown.read_text()
+
+
+def test_local_file_sidecar_keeps_the_full_path(tmp_path) -> None:
+    source = tmp_path / "documento.pdf"
+    audio = tmp_path / "Titolo.mp3"
+
+    sidecar = _write_source_txt(audio, str(source.resolve()))
+
+    assert sidecar.read_text() == f"{source.resolve()}\n"
 
 
 def test_recording_a_pending_source_does_not_create_markdown(tmp_path) -> None:
@@ -63,6 +72,21 @@ def test_publish_bundle_creates_all_artifacts_with_matching_names(tmp_path) -> N
     assert _is_complete_audio(audio)
     assert audio.with_suffix(".txt").read_text() == "https://example.test/source\n"
     assert "Testo della fonte" in audio.with_suffix(".md").read_text()
+
+
+def test_local_file_bundle_does_not_create_markdown(tmp_path) -> None:
+    staging = tmp_path / ".pending"
+    staging.mkdir()
+    staged_audio = staging / "Titolo.mp3"
+    staged_audio.write_bytes(b"mp3 data")
+
+    audio = _publish_audio_bundle(
+        staged_audio, tmp_path, "Titolo", "/Users/example/documento.pdf", "", include_markdown=False
+    )
+
+    assert audio.with_suffix(".txt").read_text() == "/Users/example/documento.pdf\n"
+    assert not audio.with_suffix(".md").exists()
+    assert _is_complete_audio(audio, include_markdown=False)
 
 
 def test_existing_bare_audio_can_be_completed_without_a_second_download(tmp_path) -> None:
@@ -107,6 +131,26 @@ def test_url_list_processes_and_removes_only_the_first_active_url(tmp_path) -> N
     assert remove_url("https://example.test/first", list_file)
     assert count_urls(list_file) == 1
     assert list_file.read_text() == "# Da elaborare\n\nhttps://example.test/second\n"
+
+
+def test_local_file_is_stored_in_the_same_plain_text_queue(tmp_path) -> None:
+    list_file = tmp_path / "url-list.txt"
+    source = tmp_path / "documento.pdf"
+    source.write_bytes(b"pdf")
+
+    assert add_url("https://example.test/first", list_file)
+    assert add_file(source, list_file)
+    assert not add_file(source, list_file)
+    assert active_urls(list_file) == ["https://example.test/first", source.resolve().as_uri()]
+
+
+def test_remove_all_clears_the_entire_queue(tmp_path) -> None:
+    list_file = tmp_path / "url-list.txt"
+    list_file.write_text("# nota\nhttps://example.test/first\nhttps://example.test/second\n")
+
+    assert remove_all(list_file) == 2
+    assert list_file.read_text() == ""
+    assert active_urls(list_file) == []
 
 
 def test_discarded_url_is_moved_once_to_its_own_plain_text_list(tmp_path) -> None:
