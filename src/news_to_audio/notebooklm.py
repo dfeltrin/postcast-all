@@ -8,7 +8,7 @@ import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Callable
-from time import monotonic, sleep
+from time import monotonic
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -20,6 +20,8 @@ GENERATION_POLL_MS = 30_000
 MAX_CLEAN_RECREATION_ATTEMPTS = 2
 FILE_UPLOAD_TIMEOUT_SECONDS = 20 * 60
 FILE_UPLOAD_POLL_MS = 2_000
+TEXT_SOURCE_PROCESSING_TIMEOUT_SECONDS = 20 * 60
+TEXT_SOURCE_PROCESSING_POLL_MS = 2_000
 SOURCE_INDEX_NAME = ".source-urls.json"
 SOURCE_REGISTRY = Path("state/source-urls.json")
 NOTEBOOK_JOBS_FILE = Path("state/notebook-jobs.json")
@@ -343,8 +345,14 @@ def _add_copied_text(
     _raise_if_daily_limit(page)
     _set_notebook_title(page, title)
     on_status(f"Notebook creato con titolo: {title}")
-    add_source_button = page.locator("button.add-source-button")
-    add_source_button.wait_for(state="visible", timeout=20_000)
+    # NotebookLM replaced the old ``add-source-button`` class in its current
+    # interface.  Its accessible label has remained stable across the Italian
+    # and English UIs, so keep the class as a legacy fallback only.
+    add_source_button = _last_visible(page.locator(
+        'button[aria-label*="aggiungi fonte" i], '
+        'button[aria-label*="add source" i], '
+        'button.add-source-button'
+    ))
     # Native DOM click reliably reaches NotebookLM's Angular handler.
     add_source_button.evaluate("button => button.click()")
     page.wait_for_timeout(500)
@@ -356,7 +364,67 @@ def _add_copied_text(
     url_input.fill(f"Fonte: {url}\n\n{text[:TEXT_LIMIT]}", timeout=20_000)
     # Import labels vary between NotebookLM releases and account languages.
     _click_first(page, ["insert", "inserisci", "add", "aggiungi", "import", "importa"])
-    sleep(3)
+    _wait_for_copied_text_ready(page, on_status)
+
+
+def _wait_for_copied_text_ready(page: Page, on_status: Callable[[str], None]) -> None:
+    """Wait for NotebookLM to finish indexing a pasted-text source.
+
+    Clicking ``Inserisci`` only submits the text.  NotebookLM adds the source
+    card before its indexing phase has necessarily completed, so a short fixed
+    delay can start an Audio Overview from an incomplete source.
+    """
+    busy = re.compile(r"caricamento|carica in corso|elaborazione|indicizz|uploading|processing|indexing", re.I)
+    failed = re.compile(r"errore|non (?:è|e') stato possibile|failed|unsupported|non supportato", re.I)
+    deadline = monotonic() + TEXT_SOURCE_PROCESSING_TIMEOUT_SECONDS
+    ready_checks = 0
+    reported_wait = False
+    while monotonic() < deadline:
+        _raise_if_daily_limit(page)
+        sources = page.locator(".single-source-container")
+        source = None
+        for index in range(sources.count() - 1, -1, -1):
+            candidate = sources.nth(index)
+            try:
+                if candidate.is_visible():
+                    source = candidate
+                    break
+            except PlaywrightTimeoutError:
+                continue
+        if source is None:
+            ready_checks = 0
+        else:
+            try:
+                source_text = source.inner_text(timeout=1_000)
+                source_class = source.get_attribute("class") or ""
+                if failed.search(f"{source_text} {source_class}"):
+                    raise NotebookLMError("NotebookLM non ha potuto analizzare il testo della fonte.")
+                spinner_visible = source.locator(
+                    "mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, "
+                    '[role="progressbar"], [aria-busy="true"], .loading-spinner, '
+                    ".loading-indicator, .spinner"
+                ).evaluate_all(
+                    "elements => elements.some(element => { const style = getComputedStyle(element); return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length; })"
+                )
+            except PlaywrightTimeoutError:
+                ready_checks = 0
+                spinner_visible = True
+                source_text = ""
+                source_class = ""
+            if spinner_visible or busy.search(f"{source_text} {source_class}"):
+                ready_checks = 0
+            else:
+                # NotebookLM can render the card one repaint before changing it
+                # to its processing state.  Three clean reads avoid that race.
+                ready_checks += 1
+                if ready_checks >= 3:
+                    on_status("Importazione e analisi del testo completate.")
+                    return
+        if not reported_wait:
+            on_status("Attendo il completamento dell’importazione in NotebookLM…")
+            reported_wait = True
+        page.wait_for_timeout(TEXT_SOURCE_PROCESSING_POLL_MS)
+    raise NotebookLMError("Importazione o analisi del testo non completata entro 20 minuti.")
 
 
 def _add_local_file(
@@ -372,8 +440,11 @@ def _add_local_file(
     _raise_if_daily_limit(page)
     _set_notebook_title(page, title)
     on_status(f"Notebook creato con titolo: {title}")
-    add_source_button = page.locator("button.add-source-button")
-    add_source_button.wait_for(state="visible", timeout=20_000)
+    add_source_button = _last_visible(page.locator(
+        'button[aria-label*="aggiungi fonte" i], '
+        'button[aria-label*="add source" i], '
+        'button.add-source-button'
+    ))
     add_source_button.evaluate("button => button.click()")
     page.wait_for_timeout(500)
 
@@ -558,6 +629,11 @@ def _last_visible(locator):
 
 
 def _start_audio_generation(page: Page, language: str, prompt: str | None, on_status: Callable[[str], None]) -> None:
+    # NotebookLM disables the Audio Overview tile once the daily allowance is
+    # exhausted.  In that state there is no clickable control, so checking only
+    # after a click turns a clear service limit into the misleading "button not
+    # available" error.  Inspect the page before looking for an enabled tile.
+    _raise_if_daily_limit(page)
     audio_buttons = page.locator(
         '[role="button"].create-artifact-button-container[aria-label*="overview audio" i], '
         '[role="button"].create-artifact-button-container[aria-label*="audio overview" i]'

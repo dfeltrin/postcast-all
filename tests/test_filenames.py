@@ -101,6 +101,7 @@ def test_existing_bare_audio_can_be_completed_without_a_second_download(tmp_path
 
 def test_daily_limit_messages_are_recognized_in_italian_and_english() -> None:
     assert _daily_limit_message("Hai raggiunto il limite giornaliero per NotebookLM.")
+    assert _daily_limit_message("Hai raggiunto il limite giornaliero di overview audio.")
     assert _daily_limit_message("You've reached your daily limit. Try again tomorrow.")
     assert _daily_limit_message("Generazione completata") is None
 
