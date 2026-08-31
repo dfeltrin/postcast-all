@@ -7,14 +7,14 @@ from .notebooklm import NotebookLMError, download_ready_audios
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Scarica gli Audio Overview pronti dai notebook esistenti")
+    parser = argparse.ArgumentParser(description="Download ready Audio Overviews from existing notebooks")
     parser.add_argument("--output-dir", type=Path, default=Path("AudioOverview"))
     parser.add_argument("--profile-dir", type=Path, default=Path("state/browser-profile"))
     arguments = parser.parse_args()
     try:
         files, skipped = download_ready_audios(arguments.output_dir, arguments.profile_dir)
     except (NotebookLMError, OSError) as exc:
-        raise SystemExit(f"Errore: {exc}") from exc
-    print(f"Scaricati: {len(files)}. Notebook senza audio pronto: {skipped}.")
+        raise SystemExit(f"Error: {exc}") from exc
+    print(f"Downloaded: {len(files)}. Notebooks without ready audio: {skipped}.")
     for file in files:
         print(file)

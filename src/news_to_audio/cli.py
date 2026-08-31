@@ -40,9 +40,9 @@ def _process_one(url: str, output_dir: Path) -> str:
         audio_file = process_file_to_completion(file_path, output_dir, PROFILE_DIR, "Italian", None, on_status=_print)
         required = (audio_file, audio_file.with_suffix(".txt"))
         if not audio_file.is_file() or audio_file.stat().st_size == 0 or not all(path.is_file() for path in required[1:]):
-            raise OSError(f"File finali incompleti: il file resta nella lista ({file_path})")
+            raise OSError(f"Output files are incomplete: the file remains in the queue ({file_path})")
         if not remove_url(url):
-            raise OSError(f"Audio e file associati creati, ma il file non è stato rimosso dalla lista: {file_path}")
+            raise OSError(f"Audio and sidecar files were created, but the file was not removed from the queue: {file_path}")
         return title
     source = extract_url(url)
     title = normalize_title(source.title)
@@ -52,9 +52,9 @@ def _process_one(url: str, output_dir: Path) -> str:
     )
     required = (audio_file, audio_file.with_suffix(".txt"), audio_file.with_suffix(".md"))
     if not audio_file.is_file() or audio_file.stat().st_size == 0 or not all(path.is_file() for path in required[1:]):
-        raise OSError(f"File finali incompleti: l’URL resta nella lista ({url})")
+        raise OSError(f"Output files are incomplete: the URL remains in the queue ({url})")
     if not remove_url(url):
-        raise OSError(f"Audio e file associati creati, ma l’URL non è stato rimosso dalla lista: {url}")
+        raise OSError(f"Audio and sidecar files were created, but the URL was not removed from the queue: {url}")
     return title
 
 
@@ -64,34 +64,34 @@ def _sync(output_dir: Path) -> None:
     downloaded: tuple[list[Path], int] = ([], 0)
     deleted = 0
     try:
-        _print("\nVerifica dei notebook esistenti…")
+        _print("\nChecking existing notebooks…")
         verification = verify_audio_overviews(PROFILE_DIR, on_status=_print)
     except NotebookLMDailyLimitError as exc:
-        _print(f"\n{exc}\nElaborazione della lista interrotta.")
+        _print(f"\n{exc}\nQueue processing stopped.")
         return
     except NotebookLMError as exc:
-        _print(f"Verifica non disponibile, proseguo con la lista: {exc}")
+        _print(f"Checking is unavailable; continuing with the queue: {exc}")
     if verification[4]:
-        _print("\nLimite giornaliero raggiunto. Elaborazione della lista interrotta.")
+        _print("\nDaily limit reached. Queue processing stopped.")
         return
 
     try:
-        _print("\nDownload degli Audio Overview già pronti…")
+        _print("\nDownloading ready Audio Overviews…")
         downloaded = download_ready_audios(output_dir, PROFILE_DIR, on_status=_print)
     except NotebookLMDailyLimitError as exc:
-        _print(f"\n{exc}\nElaborazione della lista interrotta.")
+        _print(f"\n{exc}\nQueue processing stopped.")
         return
     except NotebookLMError as exc:
-        _print(f"Nessun download completato, proseguo con la lista: {exc}")
+        _print(f"No download completed; continuing with the queue: {exc}")
 
     try:
-        _print("\nEliminazione dei notebook [DONE] già salvati…")
+        _print("\nDeleting saved [DONE] notebooks…")
         deleted = delete_done_notebooks(PROFILE_DIR, on_status=_print)
     except NotebookLMDailyLimitError as exc:
-        _print(f"\n{exc}\nElaborazione della lista interrotta.")
+        _print(f"\n{exc}\nQueue processing stopped.")
         return
     except NotebookLMError as exc:
-        _print(f"Eliminazione non completata, proseguo con la lista: {exc}")
+        _print(f"Deletion was not completed; continuing with the queue: {exc}")
 
     completed: list[str] = []
     failed: dict[str, str] = {}
@@ -102,7 +102,7 @@ def _sync(output_dir: Path) -> None:
     cycle = 0
     while (urls := active_urls()):
         cycle += 1
-        _print(f"\nPassaggio {cycle}: {len(urls)} elementi da elaborare.")
+        _print(f"\nPass {cycle}: {len(urls)} items to process.")
         for position, url in enumerate(urls, start=1):
             label = Path(unquote(urlsplit(url).path)).name if urlsplit(url).scheme == "file" else url
             _print(f"\n[{position}/{len(urls)}] {label}")
@@ -111,7 +111,7 @@ def _sync(output_dir: Path) -> None:
                 failed.pop(url, None)
             except NotebookLMDailyLimitError as exc:
                 daily_limit = True
-                _print(f"{exc}\nElaborazione della lista interrotta.")
+                _print(f"{exc}\nQueue processing stopped.")
                 break
             except SourceAccessError as exc:
                 inaccessible_attempts[url] = inaccessible_attempts.get(url, 0) + 1
@@ -119,33 +119,33 @@ def _sync(output_dir: Path) -> None:
                 if attempts >= MAX_INACCESSIBLE_RETRIES and discard_url(url):
                     automatically_rejected.append((url, str(exc)))
                     failed.pop(url, None)
-                    _print(f"Pagina non accessibile dopo {attempts} tentativi: spostata negli scartati.")
+                    _print(f"Page inaccessible after {attempts} attempts: moved to rejected items.")
                 else:
                     failed[url] = str(exc)
-                    _print(f"Pagina non accessibile ({attempts}/{MAX_INACCESSIBLE_RETRIES}): resta in lista.")
+                    _print(f"Page inaccessible ({attempts}/{MAX_INACCESSIBLE_RETRIES}): remains in the queue.")
             except Exception as exc:
                 failed[url] = str(exc)
                 if urlsplit(url).scheme == "file":
                     file_needs_attention = True
-                    _print(f"Errore: {exc}\nFile mantenuto in lista. Sincronizzazione sospesa: riprova con /sync dopo averlo verificato.")
+                    _print(f"Error: {exc}\nFile retained in the queue. Synchronization paused: run /sync again after checking it.")
                     break
-                _print(f"Errore: {exc}\nURL mantenuto in lista.")
+                _print(f"Error: {exc}\nURL retained in the queue.")
         if daily_limit or file_needs_attention or not active_urls():
             break
-        _print(f"\nPassaggio completato. Nuovo tentativo tra {RETRY_DELAY_SECONDS} secondi…")
+        _print(f"\nPass complete. Retrying in {RETRY_DELAY_SECONDS} seconds…")
         sleep(RETRY_DELAY_SECONDS)
 
     existing, maps_deleted, audio_started, verify_failed, _ = verification
     files, skipped = downloaded
-    _print("\n── Riepilogo sincronizzazione ──")
-    _print(f"Audio precedenti scaricati: {len(files)} · Notebook [DONE] eliminati: {deleted}")
-    _print(f"Audio già presenti: {existing} · Mappe rimosse: {maps_deleted} · Audio avviati: {audio_started}")
-    _print(f"Elementi completati: {len(completed)} · Elementi ancora in lista: {count_urls(URL_LIST_FILE)}")
-    _print(f"URL scartati automaticamente: {len(automatically_rejected)}")
+    _print("\n── Synchronization summary ──")
+    _print(f"Previous audio downloaded: {len(files)} · [DONE] notebooks deleted: {deleted}")
+    _print(f"Audio already present: {existing} · Mind maps removed: {maps_deleted} · Audio started: {audio_started}")
+    _print(f"Items completed: {len(completed)} · Items still queued: {count_urls(URL_LIST_FILE)}")
+    _print(f"URLs automatically rejected: {len(automatically_rejected)}")
     if skipped or verify_failed:
-        _print(f"Notebook da riesaminare: {skipped + verify_failed}")
+        _print(f"Notebooks to review: {skipped + verify_failed}")
     if daily_limit:
-        _print("Limite giornaliero raggiunto: gli URL rimanenti restano in lista.")
+        _print("Daily limit reached: remaining URLs stay in the queue.")
 
 
 def _show_urls(path: Path, heading: str) -> None:
@@ -173,7 +173,7 @@ def _pick_file() -> Path | None:
             parent=root, title="Seleziona un file da aggiungere a NotebookLM"
         )
     except Exception as exc:
-        _print(f"Impossibile aprire il selettore file: {exc}")
+        _print(f"Unable to open the file picker: {exc}")
         return None
     finally:
         # Always tear down the hidden Tk owner window.  Leaving it alive can
@@ -188,39 +188,39 @@ def _pick_file() -> Path | None:
 
 def _help() -> None:
     _print("""
-Comandi disponibili:
-  /add, /a <url>       aggiunge un URL alla coda (i duplicati sono ignorati)
-  /addfile             apre il selettore e aggiunge un file locale alla coda
-  /list, /l            mostra URL e file in attesa
-  /removeall, /r       elimina tutti gli elementi dalla coda
-  /rejected            mostra gli URL scartati automaticamente
-  /sync, /s            verifica, scarica, archivia e completa la coda
-  /output, /o [cartella] mostra o imposta la cartella di output
-  /help, /h            mostra questo aiuto
-  /quit, /q            chiude l'applicazione
+Available commands:
+  /add, /a <url>       adds a URL to the queue (duplicates are ignored)
+  /addfile             opens the picker and adds a local file to the queue
+  /list, /l            shows pending URLs and files
+  /removeall, /r       removes every item from the queue
+  /rejected            shows automatically rejected URLs
+  /sync, /s            checks, downloads, archives, and completes the queue
+  /output, /o [directory] shows or sets the output directory
+  /help, /h            shows this help
+  /quit, /q            closes the application
 """.strip())
 
 
 def main() -> None:
     output_dir = load_output_dir()
     _print("Podcast All CLI")
-    _print("Digita /help per i comandi. Gli elementi restano in lista finché i file di output richiesti non sono completi.")
+    _print("Type /help for commands. Items remain queued until all required output files are complete.")
     while True:
         try:
             line = input("\npodcast-all › ").strip()
         except (EOFError, KeyboardInterrupt):
-            _print("\nArrivederci.")
+            _print("\nGoodbye.")
             return
         if not line:
             continue
         if not line.startswith("/"):
             if line.startswith(("http://", "https://")):
                 if add_url(line):
-                    _print("URL aggiunto alla lista.")
+                    _print("URL added to the queue.")
                 else:
-                    _print("URL già presente nella lista.")
+                    _print("URL is already in the queue.")
             else:
-                _print("Usa un comando che inizia con / oppure digita direttamente un URL. Digita /help.")
+                _print("Use a command beginning with / or enter a URL directly. Type /help.")
             continue
         try:
             parts = shlex.split(line[1:])
@@ -240,40 +240,40 @@ def main() -> None:
             "q": "quit",
         }.get(command, command)
         if command in {"quit", "exit", "q"}:
-            _print("Arrivederci.")
+            _print("Goodbye.")
             return
         if command in {"help", "?"}:
             _help()
         elif command == "add":
             if len(arguments) != 1 or not arguments[0].startswith(("http://", "https://")):
-                _print("Uso: /add https://esempio.it/articolo")
+                _print("Usage: /add https://example.com/article")
             elif add_url(arguments[0]):
-                _print("URL aggiunto alla lista.")
+                _print("URL added to the queue.")
             else:
-                _print("URL già presente nella lista.")
+                _print("URL is already in the queue.")
         elif command == "addfile":
             if arguments:
-                _print("Uso: /addfile")
+                _print("Usage: /addfile")
                 continue
             file_path = _pick_file()
             if file_path is None:
-                _print("Nessun file selezionato.")
+                _print("No file selected.")
             elif not file_path.is_file():
-                _print(f"File non valido: {file_path}")
+                _print(f"Invalid file: {file_path}")
             elif add_file(file_path):
-                _print(f"File aggiunto alla lista: {file_path.name}")
+                _print(f"File added to the queue: {file_path.name}")
             else:
-                _print("File già presente nella lista.")
+                _print("File is already in the queue.")
         elif command == "list":
-            _show_urls(URL_LIST_FILE, "URL in lista")
+            _show_urls(URL_LIST_FILE, "Queued URLs")
         elif command == "removeall":
             if arguments:
-                _print("Uso: /removeall")
+                _print("Usage: /removeall")
             else:
                 removed = remove_all(URL_LIST_FILE)
-                _print(f"Lista svuotata: rimossi {removed} elementi.")
+                _print(f"Queue cleared: removed {removed} items.")
         elif command in {"rejected", "scartati"}:
-            _show_urls(REJECTED_URL_LIST_FILE, "URL scartati")
+            _show_urls(REJECTED_URL_LIST_FILE, "Rejected URLs")
         elif command == "output":
             if not arguments:
                 _print(f"Cartella output: {output_dir}")
@@ -282,11 +282,11 @@ def main() -> None:
                 save_output_dir(output_dir)
                 _print(f"Cartella output impostata: {output_dir}")
             else:
-                _print("Uso: /output [/percorso/cartella]")
+                _print("Usage: /output [/path/to/directory]")
         elif command == "sync":
             _sync(output_dir)
         else:
-            _print("Comando sconosciuto. Digita /help.")
+            _print("Unknown command. Type /help.")
 
 
 if __name__ == "__main__":

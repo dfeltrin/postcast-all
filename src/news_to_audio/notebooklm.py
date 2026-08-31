@@ -43,7 +43,7 @@ class NotebookLMDailyLimitError(NotebookLMError):
 def _daily_limit_message(page_text: str) -> str | None:
     normalized = re.sub(r"\s+", " ", page_text)
     if any(pattern.search(normalized) for pattern in DAILY_LIMIT_PATTERNS):
-        return "Hai raggiunto il limite giornaliero di NotebookLM. Riprova domani."
+        return "You have reached NotebookLM's daily limit. Try again tomorrow."
     return None
 
 
@@ -144,7 +144,7 @@ def _source_url(output_dir: Path, title: str) -> str | None:
         return entry["url"]
     source_file = output_dir / f"{_safe_filename(title)}.md"
     try:
-        match = re.search(r"^Fonte:\s*(https?://\S+)", source_file.read_text(encoding="utf-8"), re.MULTILINE)
+        match = re.search(r"^(?:Source|Fonte):\s*(https?://\S+)", source_file.read_text(encoding="utf-8"), re.MULTILINE)
         return match.group(1) if match else None
     except OSError:
         return None
@@ -165,7 +165,7 @@ def _write_source_txt(audio_file: Path, url: str) -> Path:
 
 def _write_source_md(audio_file: Path, title: str, url: str, text: str) -> Path:
     md_file = audio_file.with_suffix(".md")
-    md_file.write_text(f"# {title}\n\nFonte: {url}\n\n{text}\n", encoding="utf-8")
+    md_file.write_text(f"# {title}\n\nSource: {url}\n\n{text}\n", encoding="utf-8")
     return md_file
 
 
@@ -225,7 +225,7 @@ def _publish_audio_bundle(
     staged_files = [(staged_audio, output), (staged_txt, output.with_suffix(".txt"))]
     if include_markdown:
         staged_md = staged_audio.with_suffix(".md")
-        _write_text_atomically(staged_md, f"# {title}\n\nFonte: {url}\n\n{text}\n")
+        _write_text_atomically(staged_md, f"# {title}\n\nSource: {url}\n\n{text}\n")
         staged_files.append((staged_md, output.with_suffix(".md")))
     published: list[Path] = []
     try:
@@ -244,7 +244,7 @@ def _publish_missing_sidecars(
 ) -> None:
     """Finish a bundle left by an older version which saved only the MP3."""
     if audio_file.with_suffix(".txt").exists() or (include_markdown and audio_file.with_suffix(".md").exists()):
-        raise NotebookLMError(f"File associati incompleti per: {audio_file.name}")
+        raise NotebookLMError(f"Sidecar files are incomplete for: {audio_file.name}")
     staging = audio_file.parent / f".audio-overview-pending-{uuid4().hex}"
     staging.mkdir()
     staged_txt = staging / audio_file.with_suffix(".txt").name
@@ -254,7 +254,7 @@ def _publish_missing_sidecars(
         staged_files = [(staged_txt, audio_file.with_suffix(".txt"))]
         if include_markdown:
             staged_md = staging / audio_file.with_suffix(".md").name
-            _write_text_atomically(staged_md, f"# {title}\n\nFonte: {url}\n\n{text}\n")
+            _write_text_atomically(staged_md, f"# {title}\n\nSource: {url}\n\n{text}\n")
             staged_files.append((staged_md, audio_file.with_suffix(".md")))
         for source, target in staged_files:
             os.replace(source, target)
@@ -320,12 +320,12 @@ def _wait_for_signin_or_home(page: Page, on_status: Callable[[str], None]) -> No
                     # finished hydrating.  Confirm the button stays ready.
                     page.wait_for_timeout(750)
                     if candidate.is_visible() and candidate.is_enabled():
-                        on_status("NotebookLM pronto.")
+                        on_status("NotebookLM is ready.")
                         return
             except PlaywrightTimeoutError:
                 continue
         page.wait_for_timeout(250)
-    raise NotebookLMError("Accesso a NotebookLM non completato entro 3 minuti.")
+    raise NotebookLMError("NotebookLM sign-in did not complete within 3 minutes.")
 
 
 def _add_copied_text(
@@ -337,14 +337,14 @@ def _add_copied_text(
     Many publishers block NotebookLM's crawler even when the local extractor can
     access the article.  Supplying the extracted text makes those sources usable.
     """
-    on_status("Creazione del notebook e importazione del testo estratto…")
+    on_status("Creating the notebook and importing extracted text…")
     _click_first(page, ["new notebook", "nuovo notebook", "crea nuovo"])
     if on_notebook_created:
         on_notebook_created()
     page.wait_for_timeout(750)
     _raise_if_daily_limit(page)
     _set_notebook_title(page, title)
-    on_status(f"Notebook creato con titolo: {title}")
+    on_status(f"Notebook created with title: {title}")
     # NotebookLM replaced the old ``add-source-button`` class in its current
     # interface.  Its accessible label has remained stable across the Italian
     # and English UIs, so keep the class as a legacy fallback only.
@@ -361,7 +361,7 @@ def _add_copied_text(
     copied_text_button.click(force=True, no_wait_after=True)
     page.wait_for_timeout(500)
     url_input = _last_visible(page.locator("textarea"))
-    url_input.fill(f"Fonte: {url}\n\n{text[:TEXT_LIMIT]}", timeout=20_000)
+    url_input.fill(f"Source: {url}\n\n{text[:TEXT_LIMIT]}", timeout=20_000)
     # Import labels vary between NotebookLM releases and account languages.
     _click_first(page, ["insert", "inserisci", "add", "aggiungi", "import", "importa"])
     _wait_for_copied_text_ready(page, on_status)
@@ -398,7 +398,7 @@ def _wait_for_copied_text_ready(page: Page, on_status: Callable[[str], None]) ->
                 source_text = source.inner_text(timeout=1_000)
                 source_class = source.get_attribute("class") or ""
                 if failed.search(f"{source_text} {source_class}"):
-                    raise NotebookLMError("NotebookLM non ha potuto analizzare il testo della fonte.")
+                    raise NotebookLMError("NotebookLM could not analyze the source text.")
                 spinner_visible = source.locator(
                     "mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, "
                     '[role="progressbar"], [aria-busy="true"], .loading-spinner, '
@@ -418,13 +418,13 @@ def _wait_for_copied_text_ready(page: Page, on_status: Callable[[str], None]) ->
                 # to its processing state.  Three clean reads avoid that race.
                 ready_checks += 1
                 if ready_checks >= 3:
-                    on_status("Importazione e analisi del testo completate.")
+                    on_status("Text import and analysis completed.")
                     return
         if not reported_wait:
-            on_status("Attendo il completamento dell’importazione in NotebookLM…")
+            on_status("Waiting for NotebookLM to finish importing…")
             reported_wait = True
         page.wait_for_timeout(TEXT_SOURCE_PROCESSING_POLL_MS)
-    raise NotebookLMError("Importazione o analisi del testo non completata entro 20 minuti.")
+    raise NotebookLMError("Text import or analysis did not complete within 20 minutes.")
 
 
 def _add_local_file(
@@ -432,14 +432,14 @@ def _add_local_file(
     on_notebook_created: Callable[[], None] | None = None,
 ) -> None:
     """Create a notebook and import one local file through NotebookLM's uploader."""
-    on_status("Creazione del notebook e caricamento del file locale…")
+    on_status("Creating the notebook and uploading the local file…")
     _click_first(page, ["new notebook", "nuovo notebook", "crea nuovo"])
     if on_notebook_created:
         on_notebook_created()
     page.wait_for_timeout(750)
     _raise_if_daily_limit(page)
     _set_notebook_title(page, title)
-    on_status(f"Notebook creato con titolo: {title}")
+    on_status(f"Notebook created with title: {title}")
     add_source_button = _last_visible(page.locator(
         'button[aria-label*="aggiungi fonte" i], '
         'button[aria-label*="add source" i], '
@@ -460,8 +460,8 @@ def _add_local_file(
             upload_button.click(force=True, no_wait_after=True)
         chooser_info.value.set_files(str(file_path), timeout=10_000)
     except PlaywrightTimeoutError as exc:
-        raise NotebookLMError("Opzione per caricare un file non trovata in NotebookLM.") from exc
-    on_status(f"File caricato in NotebookLM: {file_path.name}")
+        raise NotebookLMError("NotebookLM's file-upload option was not found.") from exc
+    on_status(f"File uploaded to NotebookLM: {file_path.name}")
 
 
 def _wait_for_local_file_ready(page: Page, file_path: Path, on_status: Callable[[str], None]) -> None:
@@ -504,7 +504,7 @@ def _wait_for_local_file_ready(page: Page, file_path: Path, on_status: Callable[
                 except PlaywrightTimeoutError:
                     break
             if failed.search(nearby_text):
-                raise NotebookLMError(f"NotebookLM non ha potuto analizzare il file: {file_path.name}")
+                raise NotebookLMError(f"NotebookLM could not analyze the file: {file_path.name}")
             spinner_visible = visible_source.evaluate(
                 """element => {
                     const spinnerSelector = [
@@ -556,13 +556,13 @@ def _wait_for_local_file_ready(page: Page, file_path: Path, on_status: Callable[
                 # the upload UI is still transitioning to its progress state.
                 ready_checks += 1
                 if ready_checks >= 3:
-                    on_status(f"Caricamento e analisi completati: {file_path.name}")
+                    on_status(f"Upload and analysis completed: {file_path.name}")
                     return
         if not reported_wait:
-            on_status(f"Attendo il completamento del caricamento in NotebookLM: {file_path.name}…")
+            on_status(f"Waiting for NotebookLM to finish uploading: {file_path.name}…")
             reported_wait = True
         page.wait_for_timeout(FILE_UPLOAD_POLL_MS)
-    raise NotebookLMError(f"Caricamento o analisi del file non completati entro 20 minuti: {file_path.name}")
+    raise NotebookLMError(f"File upload or analysis did not complete within 20 minutes: {file_path.name}")
 
 
 def _set_notebook_title(page: Page, title: str) -> None:
@@ -571,7 +571,7 @@ def _set_notebook_title(page: Page, title: str) -> None:
     try:
         title_input.wait_for(state="attached", timeout=10_000)
     except PlaywrightTimeoutError:
-        print("Campo titolo del notebook non trovato: verra' usato il titolo predefinito di NotebookLM.")
+        print("Notebook title field not found: NotebookLM's default title will be used.")
         return
     title_widget = page.locator("editable-project-title")
     if title_widget.count():
@@ -602,7 +602,7 @@ def _set_notebook_title(page: Page, title: str) -> None:
             return
         except PlaywrightTimeoutError:
             continue
-    print("Campo titolo del notebook non trovato: verra' usato il titolo predefinito di NotebookLM.")
+    print("Notebook title field not found: NotebookLM's default title will be used.")
 
 
 def _mark_notebook_done(page: Page, title: str, on_status: Callable[[str], None]) -> None:
@@ -616,7 +616,7 @@ def _mark_notebook_done(page: Page, title: str, on_status: Callable[[str], None]
         title_widget.click(timeout=2_000)
     title_input.fill(_done_title(title), timeout=2_000)
     title_input.press("Enter")
-    on_status(f"Notebook marcato come completato: {_done_title(title)}")
+    on_status(f"Notebook marked as complete: {_done_title(title)}")
 
 
 def _last_visible(locator):
@@ -625,7 +625,7 @@ def _last_visible(locator):
         candidate = locator.nth(index)
         if candidate.is_visible():
             return candidate
-    raise NotebookLMError("Campo di testo per la fonte non trovato.")
+    raise NotebookLMError("Source text field not found.")
 
 
 def _start_audio_generation(page: Page, language: str, prompt: str | None, on_status: Callable[[str], None]) -> None:
@@ -653,7 +653,7 @@ def _start_audio_generation(page: Page, language: str, prompt: str | None, on_st
             break
         page.wait_for_timeout(250)
     if audio_button is None:
-        raise NotebookLMError("Pulsante per creare l’Audio Overview non disponibile.")
+        raise NotebookLMError("Audio Overview creation button is unavailable.")
     audio_button.evaluate("button => button.click()")
     page.wait_for_timeout(750)
     generating = page.get_by_role(
@@ -664,7 +664,7 @@ def _start_audio_generation(page: Page, language: str, prompt: str | None, on_st
     # also occur on mind-map cards and can launch the wrong artifact.
     try:
         if generating.is_visible():
-            on_status("Audio Overview avviato e confermato da NotebookLM.")
+            on_status("Audio Overview started and confirmed by NotebookLM.")
             return
     except PlaywrightTimeoutError:
         pass
@@ -675,19 +675,19 @@ def _start_audio_generation(page: Page, language: str, prompt: str | None, on_st
         generate.wait_for(state="visible", timeout=5_000)
         generate.click()
     except PlaywrightTimeoutError as exc:
-        raise NotebookLMError("NotebookLM non ha aperto il pannello dell’Audio Overview.") from exc
+        raise NotebookLMError("NotebookLM did not open the Audio Overview panel.") from exc
     deadline = monotonic() + 30
     while monotonic() < deadline:
         _raise_if_daily_limit(page)
         try:
             if generating.is_visible():
-                on_status("Audio Overview avviato e confermato da NotebookLM.")
+                on_status("Audio Overview started and confirmed by NotebookLM.")
                 return
         except PlaywrightTimeoutError:
             pass
         page.wait_for_timeout(250)
     _raise_if_daily_limit(page)
-    raise NotebookLMError("NotebookLM non ha confermato l'avvio della generazione audio.")
+    raise NotebookLMError("NotebookLM did not confirm that audio generation started.")
 
 
 def _save_download(page: Page, title: str, destination: Path, on_status: Callable[[str], None]) -> Path:
@@ -707,7 +707,7 @@ def _save_download(page: Page, title: str, destination: Path, on_status: Callabl
         menu_item.wait_for(state="visible", timeout=5_000)
         download_target = menu_item
     with page.expect_download(timeout=30_000) as download_info:
-        on_status(f"Download dell'audio: {title}")
+        on_status(f"Downloading audio: {title}")
         download_target.click()
     download = download_info.value
     destination.mkdir(parents=True, exist_ok=True)
@@ -765,7 +765,7 @@ def _delete_notebook_by_title(page: Page, title: str, on_status: Callable[[str],
     # deletion time to settle, then reload before any subsequent list lookup.
     page.wait_for_timeout(2_000)
     page.goto("https://notebooklm.google.com/", wait_until="domcontentloaded")
-    on_status(f"Notebook rimosso: {title}")
+    on_status(f"Notebook removed: {title}")
     return True
 
 
@@ -800,12 +800,12 @@ def start_audio_generation(
             target_title = retry_title or title
             existing = next(((name, href) for name, href in _home_notebooks(page) if name == target_title), None)
             if existing is not None:
-                report(f"Notebook già creato trovato, riprendo: {target_title}")
+                report(f"Existing notebook found; resuming: {target_title}")
                 _open_notebook(page, existing[0], existing[1])
                 page.wait_for_timeout(750)
                 if _has_audio_overview(page):
                     _remember_notebook_job(url, target_title, "audio_started")
-                    report("Audio Overview già presente: nessun nuovo notebook creato.")
+                    report("Audio Overview already exists: no new notebook created.")
                     return
                 _start_audio_generation(page, language, prompt, report)
                 _remember_notebook_job(url, target_title, "audio_started")
@@ -818,11 +818,11 @@ def start_audio_generation(
             if notebook_created and created_in_this_attempt:
                 try:
                     if not _delete_notebook_by_title(page, title, report):
-                        message += " Il notebook appena creato non e' stato trovato per la rimozione automatica."
+                        message += " The newly created notebook could not be found for automatic removal."
                     else:
                         _forget_notebook_job(url)
                 except Exception as cleanup_exc:
-                    message += f" Impossibile rimuovere il notebook appena creato: {cleanup_exc}"
+                    message += f" Unable to remove the newly created notebook: {cleanup_exc}"
             debug_dir = output_dir / ".debug"
             _debug(page, debug_dir)
             (debug_dir / "notebooklm-error.txt").write_text(
@@ -847,22 +847,22 @@ def _wait_for_audio_ready(page: Page, title: str, on_status: Callable[[str], Non
         if audio_items:
             details = " ".join(audio_items[-1].inner_text().split()).lower()
             if not re.search(r"generazione.*in corso|generating|torna tra|come back", details, re.I):
-                on_status(f"Audio Overview pronto per il download: {title}")
+                on_status(f"Audio Overview ready to download: {title}")
                 return
-            on_status(f"Audio Overview in generazione: {title}. Nuovo controllo tra 30 secondi…")
+            on_status(f"Audio Overview generating: {title}. Checking again in 30 seconds…")
         elif _artifact_items_with_icon(page, "flowchart"):
-            raise NotebookLMError(f"NotebookLM ha generato una mappa mentale anziché l’Audio Overview: {title}")
+            raise NotebookLMError(f"NotebookLM generated a mind map instead of an Audio Overview: {title}")
         else:
-            on_status(f"In attesa della creazione dell’Audio Overview: {title}. Nuovo controllo tra 30 secondi…")
+            on_status(f"Waiting for Audio Overview creation: {title}. Checking again in 30 seconds…")
         page.wait_for_timeout(GENERATION_POLL_MS)
-    raise NotebookLMError(f"Audio Overview non pronto entro 200 minuti: {title}")
+    raise NotebookLMError(f"Audio Overview was not ready within 200 minutes: {title}")
 
 
 def _save_ready_audio(page: Page, title: str, destination: Path, on_status: Callable[[str], None]) -> Path:
     """Download only the Audio Overview card, never another studio artifact."""
     audio_items = _artifact_items_with_icon(page, "audio_magic_eraser")
     if not audio_items:
-        raise NotebookLMError(f"Audio Overview non trovato per il download: {title}")
+        raise NotebookLMError(f"Audio Overview was not found for download: {title}")
     item = audio_items[-1]
     download_target = None
     buttons = item.get_by_role("button", name=re.compile("download|scarica", re.I))
@@ -879,7 +879,7 @@ def _save_ready_audio(page: Page, title: str, destination: Path, on_status: Call
         menu_item.wait_for(state="visible", timeout=5_000)
         download_target = menu_item
     with page.expect_download(timeout=30_000) as download_info:
-        on_status(f"Download dell’Audio Overview: {title}")
+        on_status(f"Downloading Audio Overview: {title}")
         download_target.click()
     destination.mkdir(parents=True, exist_ok=True)
     staging = destination / f".audio-overview-pending-{uuid4().hex}"
@@ -923,7 +923,7 @@ def process_url_to_completion(
                 _remember_notebook_job(url, title, "created")
 
             try:
-                report(f"Elaborazione completa di {title} ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
+                report(f"Processing {title} to completion ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
                 _wait_for_signin_or_home(page, report)
                 _add_copied_text(page, title, url, text, report, on_notebook_created=mark_created)
                 _start_audio_generation(page, language, prompt, report)
@@ -955,15 +955,15 @@ def process_url_to_completion(
                 if created:
                     try:
                         if not _delete_notebook_by_title(page, title, report):
-                            raise NotebookLMError(f"Notebook da ricreare non trovato: {title}") from exc
+                            raise NotebookLMError(f"Notebook to recreate was not found: {title}") from exc
                         _forget_notebook_job(url)
                     except Exception as cleanup_exc:
-                        raise NotebookLMError(f"Errore per {title}; pulizia del notebook non riuscita: {cleanup_exc}") from exc
+                        raise NotebookLMError(f"Error for {title}; notebook cleanup failed: {cleanup_exc}") from exc
                 if attempt < MAX_CLEAN_RECREATION_ATTEMPTS:
-                    report(f"Errore per {title}; notebook rimosso. Ricreazione pulita ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
+                    report(f"Error for {title}; notebook removed. Clean recreation ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
             finally:
                 context.close()
-    raise NotebookLMError(f"Elaborazione non completata dopo {MAX_CLEAN_RECREATION_ATTEMPTS} tentativi: {last_error}")
+    raise NotebookLMError(f"Processing did not complete after {MAX_CLEAN_RECREATION_ATTEMPTS} attempts: {last_error}")
 
 
 def process_file_to_completion(
@@ -974,12 +974,12 @@ def process_file_to_completion(
     """Upload a queued local file, then create, download and finalize its audio."""
     file_path = file_path.expanduser().resolve()
     if not file_path.is_file():
-        raise FileNotFoundError(f"File locale non trovato: {file_path}")
+        raise FileNotFoundError(f"Local file not found: {file_path}")
     # Keep the full filesystem path in the user-facing TXT/MD sidecars.  The
     # file URI remains an internal, stable key for the notebook retry registry.
     source_ref = str(file_path)
     job_key = file_path.as_uri()
-    source_text = f"File locale caricato in NotebookLM: {file_path.name}\nPercorso: {file_path}"
+    source_text = f"Local file uploaded to NotebookLM: {file_path.name}\nPath: {file_path}"
     title = normalize_title(file_path.stem)
     profile_dir.mkdir(parents=True, exist_ok=True)
     record_source_url(output_dir, title, source_ref, source_text)
@@ -1000,7 +1000,7 @@ def process_file_to_completion(
                 _remember_notebook_job(job_key, title, "created")
 
             try:
-                report(f"Elaborazione completa di {file_path.name} ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
+                report(f"Processing {file_path.name} to completion ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
                 _wait_for_signin_or_home(page, report)
                 jobs = _load_notebook_jobs()
                 saved = jobs.get(_url_key(job_key), {})
@@ -1008,13 +1008,13 @@ def process_file_to_completion(
                 target_title = retry_title or title
                 existing = next(((name, href) for name, href in _home_notebooks(page) if name == target_title), None)
                 if existing is not None:
-                    report(f"Notebook del file già creato trovato, riprendo: {target_title}")
+                    report(f"Existing file notebook found; resuming: {target_title}")
                     _open_notebook(page, existing[0], existing[1])
                     page.wait_for_timeout(750)
                 if existing is None:
                     _add_local_file(page, title, file_path, report, on_notebook_created=mark_created)
                 if _has_audio_overview(page):
-                    report("Audio Overview già presente: attendo il completamento.")
+                    report("Audio Overview already exists: waiting for completion.")
                 else:
                     _wait_for_local_file_ready(page, file_path, report)
                     _start_audio_generation(page, language, prompt, report)
@@ -1045,15 +1045,15 @@ def process_file_to_completion(
                 if created:
                     try:
                         if not _delete_notebook_by_title(page, title, report):
-                            raise NotebookLMError(f"Notebook da ricreare non trovato: {title}") from exc
+                            raise NotebookLMError(f"Notebook to recreate was not found: {title}") from exc
                         _forget_notebook_job(job_key)
                     except Exception as cleanup_exc:
-                        raise NotebookLMError(f"Errore per {file_path.name}; pulizia del notebook non riuscita: {cleanup_exc}") from exc
+                        raise NotebookLMError(f"Error for {file_path.name}; notebook cleanup failed: {cleanup_exc}") from exc
                 if attempt < MAX_CLEAN_RECREATION_ATTEMPTS:
-                    report(f"Errore per {file_path.name}; notebook rimosso. Ricreazione pulita ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
+                    report(f"Error for {file_path.name}; notebook removed. Clean recreation ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
             finally:
                 context.close()
-    raise NotebookLMError(f"Elaborazione del file non completata dopo {MAX_CLEAN_RECREATION_ATTEMPTS} tentativi: {last_error}")
+    raise NotebookLMError(f"File processing did not complete after {MAX_CLEAN_RECREATION_ATTEMPTS} attempts: {last_error}")
 
 
 def download_ready_audios(
@@ -1091,10 +1091,10 @@ def download_ready_audios(
                 if title and not any(existing == title for existing, _ in notebooks):
                     notebooks.append((title, None))
             if not notebooks:
-                raise NotebookLMError("Nessun notebook disponibile nella pagina iniziale.")
+                raise NotebookLMError("No notebooks are available on the home page.")
             for title, href in notebooks:
                 if title.startswith("[DONE]"):
-                    report(f"Notebook gia' completato, salto: {title}")
+                    report(f"Notebook is already complete; skipping: {title}")
                     continue
                 try:
                     if href:
@@ -1119,7 +1119,7 @@ def download_ready_audios(
                     if complete_audio is not None:
                         _mark_notebook_done(page, title, report)
                         downloaded.append(complete_audio)
-                        report(f"File gia' completi, notebook aggiornato: {title}")
+                        report(f"Files already complete; notebook updated: {title}")
                         continue
 
                     if not source_url or source_text is None:
@@ -1134,7 +1134,7 @@ def download_ready_audios(
                         )
                         _mark_notebook_done(page, title, report)
                         downloaded.append(audio_file)
-                        report(f"MP3 precedente completato: {title}")
+                        report(f"Previous MP3 completed: {title}")
                         continue
 
                     staged_audio = _save_download(page, title, output_dir, report)
@@ -1149,7 +1149,7 @@ def download_ready_audios(
                 except Exception as exc:
                     _debug(page, output_dir / ".debug" / "download-failed" / _safe_filename(title))
                     skipped += 1
-                    report(f"Notebook non completato, salto: {title} ({exc})")
+                    report(f"Notebook not completed; skipping: {title} ({exc})")
                 finally:
                     # A failure for one notebook must never prevent the next one.
                     try:
@@ -1212,7 +1212,7 @@ def _open_notebook(page: Page, title: str, href: str | None) -> None:
                 return
         page.mouse.wheel(0, 1_200)
         page.wait_for_timeout(400)
-    raise NotebookLMError(f"Notebook non trovato nella lista: {title}")
+    raise NotebookLMError(f"Notebook not found in the list: {title}")
 
 
 def _has_audio_overview(page: Page) -> bool:
@@ -1271,9 +1271,9 @@ def _delete_mind_maps(page: Page, title: str, on_status: Callable[[str], None]) 
         except PlaywrightTimeoutError:
             page.wait_for_timeout(1_500)
         if len(_artifact_items_with_icon(page, "flowchart")) >= maps_before:
-            raise NotebookLMError(f"NotebookLM non ha confermato l’eliminazione della mappa mentale: {title}")
+            raise NotebookLMError(f"NotebookLM did not confirm mind-map deletion: {title}")
         removed += 1
-        on_status(f"Mappa mentale eliminata: {title}")
+        on_status(f"Mind map deleted: {title}")
 
 
 def verify_audio_overviews(
@@ -1297,7 +1297,7 @@ def verify_audio_overviews(
             _wait_for_signin_or_home(page, report)
             notebooks = _home_notebooks(page)
             if not notebooks:
-                raise NotebookLMError("Nessun notebook disponibile nella pagina iniziale.")
+                raise NotebookLMError("No notebooks are available on the home page.")
             for title, href in notebooks:
                 if title.startswith("[DONE]"):
                     continue
@@ -1306,20 +1306,20 @@ def verify_audio_overviews(
                     page.wait_for_timeout(750)
                     if _has_audio_overview(page):
                         already_audio += 1
-                        report(f"Audio Overview già presente: {title}")
+                        report(f"Audio Overview already exists: {title}")
                         continue
                     maps_deleted += _delete_mind_maps(page, title, report)
-                    report(f"Avvio dell’Audio Overview mancante: {title}")
+                    report(f"Starting missing Audio Overview: {title}")
                     _start_audio_generation(page, "Italian", None, report)
                     audio_started += 1
                 except NotebookLMDailyLimitError as exc:
                     limit_reached = True
-                    report(f"{exc} Verifica interrotta.")
+                    report(f"{exc} Checking stopped.")
                     break
                 except Exception as exc:
                     failed += 1
                     _debug(page, Path("AudioOverview") / ".debug" / "verify-failed" / _safe_filename(title))
-                    report(f"Notebook non verificato, salto: {title} ({exc})")
+                    report(f"Notebook was not checked; skipping: {title} ({exc})")
                 finally:
                     try:
                         page.goto("https://notebooklm.google.com/", wait_until="domcontentloaded")
@@ -1329,7 +1329,7 @@ def verify_audio_overviews(
             return already_audio, maps_deleted, audio_started, failed, limit_reached
         except Exception as exc:
             _debug(page, Path("AudioOverview") / ".debug" / "verify-failed")
-            raise NotebookLMError(f"Verifica NotebookLM non completata: {exc}") from exc
+            raise NotebookLMError(f"NotebookLM check did not complete: {exc}") from exc
         finally:
             context.close()
 
@@ -1396,19 +1396,19 @@ def delete_done_notebooks(
                         pass
                     page.wait_for_timeout(2_000)
                     page.goto("https://notebooklm.google.com/", wait_until="domcontentloaded")
-                    report(f"Notebook eliminato: {title}")
+                    report(f"Notebook deleted: {title}")
                     deleted += 1
                 except Exception as exc:
                     # A broken menu/dialog for one notebook must not leave the
                     # remaining completed notebooks undeleted.
                     failed_titles.add(title)
                     _debug(page, Path("AudioOverview") / ".debug" / "delete-failed" / _safe_filename(title))
-                    report(f"Notebook non eliminato, salto: {title} ({exc})")
+                    report(f"Notebook was not deleted; skipping: {title} ({exc})")
             if failed_titles:
-                report(f"Notebook [DONE] non eliminati: {len(failed_titles)}")
+                report(f"[DONE] notebooks not deleted: {len(failed_titles)}")
             return deleted
         except Exception as exc:
             _debug(page, Path("AudioOverview") / ".debug")
-            raise NotebookLMError(f"Eliminazione dei notebook [DONE] non completata: {exc}") from exc
+            raise NotebookLMError(f"[DONE] notebook deletion did not complete: {exc}") from exc
         finally:
             context.close()

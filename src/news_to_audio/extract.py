@@ -81,7 +81,7 @@ def extract_url(url: str, timeout: float = 30.0) -> ExtractedSource:
     except httpx.HTTPError as exc:
         status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
         detail = f"HTTP {status}" if status is not None else str(exc)
-        raise SourceAccessError(f"Pagina non accessibile: {detail}") from exc
+        raise SourceAccessError(f"Page is inaccessible: {detail}") from exc
     content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
     extension = Path(urlparse(str(response.url)).path).suffix.lower()
     if content_type == "application/pdf":
@@ -93,5 +93,5 @@ def extract_url(url: str, timeout: float = 30.0) -> ExtractedSource:
     else:
         raise ValueError(f"Tipo di contenuto non supportato: {content_type}")
     if not result.text:
-        raise ValueError("Non e' stato possibile estrarre testo dalla fonte.")
+        raise ValueError("Unable to extract text from the source.")
     return result

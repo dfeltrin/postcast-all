@@ -1,19 +1,21 @@
 # Podcast All
 
-Agente locale per creare Audio Overview in NotebookLM a partire da URL o file
-locali, mantenendo una coda persistente. Un elemento viene rimosso dalla coda
-solo dopo il download riuscito dell'audio.
+Local agent for creating NotebookLM Audio Overviews from URLs or local files,
+with a persistent queue. An item is removed from the queue only after its audio
+has been downloaded successfully.
 
-- Per un URL crea MP3, TXT (URL della fonte) e Markdown (testo estratto).
-- Per un file locale crea MP3 e TXT (percorso assoluto del file); non crea Markdown.
+- For a URL, it creates an MP3, TXT file (the source URL), and Markdown file
+  (the extracted text).
+- For a local file, it creates an MP3 and TXT file (the file's absolute path);
+  it does not create Markdown.
 
-## Prerequisiti
+## Prerequisites
 
 - Python 3.10+
-- Un account Google con accesso a [NotebookLM](https://notebooklm.google.com/)
-- Il diritto di riprodurre/elaborare la fonte indicata
+- A Google account with access to [NotebookLM](https://notebooklm.google.com/)
+- The right to reproduce or process the specified source
 
-## Installazione
+## Installation
 
 ```bash
 python3 -m venv .venv
@@ -22,50 +24,50 @@ pip install -e '.[dev]'
 playwright install chromium
 ```
 
-## Avvio
+## Running
 
 ```bash
 ./go.sh
 ```
 
-In alternativa, dopo l'installazione:
+Alternatively, after installation:
 
 ```bash
 news-to-audio
 ```
 
-Al primo avvio si apre Chromium: accedi a Google **manualmente**. La sessione è
-conservata in `state/browser-profile`, quindi gli avvii successivi normalmente
-non richiedono un nuovo accesso.
+On the first run, Chromium opens: sign in to Google **manually**. The session
+is stored in `state/browser-profile`, so subsequent runs normally do not
+require signing in again.
 
-## Coda da terminale
+## Terminal queue
 
-Comandi principali:
+Main commands:
 
-- `/add <url>` oppure `/a <url>`: aggiunge un URL alla coda.
-- `/addfile` oppure `/af`: apre il selettore di sistema e aggiunge un file locale.
-- `/list` oppure `/l`: mostra URL e file in attesa.
-- `/sync` oppure `/s`: elabora la coda nell'ordine di inserimento.
-- `/removeall` oppure `/r`: svuota completamente la coda.
-- `/rejected`: mostra gli URL scartati automaticamente.
-- `/output [cartella]` oppure `/o [cartella]`: mostra o imposta la cartella di output.
+- `/add <url>` or `/a <url>`: adds a URL to the queue.
+- `/addfile` or `/af`: opens the system file picker and adds a local file.
+- `/list` or `/l`: shows pending URLs and files.
+- `/sync` or `/s`: processes the queue in insertion order.
+- `/removeall` or `/r`: clears the entire queue.
+- `/rejected`: shows URLs that were automatically rejected.
+- `/output [directory]` or `/o [directory]`: displays or sets the output directory.
 
-Con `/addfile` il file viene memorizzato in coda insieme agli URL, non inviato
-subito a NotebookLM. Durante `/sync`, il file viene caricato solo quando arriva
-il suo turno. L'app attende il completamento del caricamento e dell'analisi
-(spinner incluso) prima di avviare l'Audio Overview.
+With `/addfile`, the file is saved to the queue alongside URLs rather than
+being sent to NotebookLM immediately. During `/sync`, it is uploaded only when
+its turn is reached. The app waits for the upload and analysis to finish
+(including any spinner) before starting the Audio Overview.
 
-Se il file viene spostato o eliminato prima dell'elaborazione, rimane in coda e
-la sincronizzazione si ferma senza ritentare in loop. Dopo aver corretto il
-problema, esegui di nuovo `/sync`: l'app riprende il notebook già creato.
+If a file is moved or deleted before processing, it remains in the queue and
+synchronization stops without retrying in a loop. Once the issue is fixed, run
+`/sync` again: the app resumes the notebook it already created.
 
-## Formati
+## Formats
 
-Per gli URL gestisce HTML, PDF, TXT/MD, DOCX, PPTX e CSV scaricabili. Per i file
-locali seleziona un formato supportato dal tuo account NotebookLM. I contenuti
-protetti da login/paywall non vengono aggirati.
+For URLs, it supports downloadable HTML, PDF, TXT/MD, DOCX, PPTX, and CSV
+files. For local files, choose a format supported by your NotebookLM account.
+Login- or paywall-protected content is not bypassed.
 
-## Diagnostica
+## Diagnostics
 
-L'interazione con NotebookLM avviene nel browser. In caso di errore vengono
-salvati screenshot e HTML in `output/.debug`.
+Interaction with NotebookLM takes place in the browser. On error, screenshots
+and HTML are saved to `output/.debug`.
