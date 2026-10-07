@@ -203,10 +203,26 @@ def _is_complete_audio(audio_file: Path, include_markdown: bool = True) -> bool:
 def _next_audio_path(destination: Path, title: str) -> Path:
     output = destination / f"{_safe_filename(title)}.mp3"
     suffix = 2
-    while output.exists():
+    while output.exists() or output.with_suffix(".pdf").exists():
         output = destination / f"{_safe_filename(title)}-{suffix}.mp3"
         suffix += 1
     return output
+
+
+def _copy_source_pdf(audio_file: Path, source_ref: str) -> Path | None:
+    source = Path(source_ref)
+    if not source.is_absolute() or source.suffix.lower() != ".pdf":
+        return None
+    target = audio_file.with_suffix(".pdf")
+    if target.exists() and source.samefile(target):
+        return target
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
 
 
 def _publish_audio_bundle(
@@ -223,6 +239,10 @@ def _publish_audio_bundle(
     staged_txt = staged_audio.with_suffix(".txt")
     _write_text_atomically(staged_txt, f"{url}\n")
     staged_files = [(staged_audio, output), (staged_txt, output.with_suffix(".txt"))]
+    if not include_markdown:
+        staged_pdf = _copy_source_pdf(staged_audio, url)
+        if staged_pdf is not None:
+            staged_files.append((staged_pdf, output.with_suffix(".pdf")))
     if include_markdown:
         staged_md = staged_audio.with_suffix(".md")
         _write_text_atomically(staged_md, f"# {title}\n\nSource: {url}\n\n{text}\n")
@@ -252,6 +272,10 @@ def _publish_missing_sidecars(
     try:
         _write_text_atomically(staged_txt, f"{url}\n")
         staged_files = [(staged_txt, audio_file.with_suffix(".txt"))]
+        if not include_markdown:
+            staged_pdf = _copy_source_pdf(staging / audio_file.name, url)
+            if staged_pdf is not None:
+                staged_files.append((staged_pdf, audio_file.with_suffix(".pdf")))
         if include_markdown:
             staged_md = staging / audio_file.with_suffix(".md").name
             _write_text_atomically(staged_md, f"# {title}\n\nSource: {url}\n\n{text}\n")
@@ -328,6 +352,18 @@ def _wait_for_signin_or_home(page: Page, on_status: Callable[[str], None]) -> No
     raise NotebookLMError("NotebookLM sign-in did not complete within 3 minutes.")
 
 
+def _source_import_option(page: Page, name: re.Pattern):
+    """Use accessible names; new notebooks may already show the source dialog."""
+    option = page.get_by_role("button", name=name).filter(visible=True).last
+    if not option.is_visible():
+        add_source = page.get_by_role(
+            "button", name=re.compile(r"^aggiungi font[ei]$|^add sources?$", re.I)
+        ).filter(visible=True).last
+        add_source.click(timeout=20_000)
+    option.wait_for(state="visible", timeout=20_000)
+    return option
+
+
 def _add_copied_text(
     page: Page, title: str, url: str, text: str, on_status: Callable[[str], None],
     on_notebook_created: Callable[[], None] | None = None,
@@ -345,25 +381,17 @@ def _add_copied_text(
     _raise_if_daily_limit(page)
     _set_notebook_title(page, title)
     on_status(f"Notebook created with title: {title}")
-    # NotebookLM replaced the old ``add-source-button`` class in its current
-    # interface.  Its accessible label has remained stable across the Italian
-    # and English UIs, so keep the class as a legacy fallback only.
-    add_source_button = _last_visible(page.locator(
-        'button[aria-label*="aggiungi fonte" i], '
-        'button[aria-label*="add source" i], '
-        'button.add-source-button'
-    ))
-    # Native DOM click reliably reaches NotebookLM's Angular handler.
-    add_source_button.evaluate("button => button.click()")
-    page.wait_for_timeout(500)
-    copied_text_button = page.locator("button.drop-zone-icon-button").filter(has_text=re.compile("testo copiato|copied text", re.I)).last
-    copied_text_button.wait_for(state="visible", timeout=20_000)
-    copied_text_button.click(force=True, no_wait_after=True)
-    page.wait_for_timeout(500)
-    url_input = _last_visible(page.locator("textarea"))
-    url_input.fill(f"Source: {url}\n\n{text[:TEXT_LIMIT]}", timeout=20_000)
-    # Import labels vary between NotebookLM releases and account languages.
-    _click_first(page, ["insert", "inserisci", "add", "aggiungi", "import", "importa"])
+    copied_text_button = _source_import_option(
+        page, re.compile(r"^testo copiato$|^copied text$", re.I)
+    )
+    copied_text_button.click(timeout=10_000)
+    text_input = page.locator("textarea").filter(visible=True).last
+    text_input.fill(f"Source: {url}\n\n{text[:TEXT_LIMIT]}", timeout=20_000)
+    # Exact names avoid selecting the underlying Add sources button.
+    submit = page.get_by_role(
+        "button", name=re.compile(r"^(insert|inserisci|add|aggiungi|import|importa)$", re.I)
+    ).filter(visible=True).last
+    submit.click(timeout=20_000)
     _wait_for_copied_text_ready(page, on_status)
 
 
@@ -440,17 +468,9 @@ def _add_local_file(
     _raise_if_daily_limit(page)
     _set_notebook_title(page, title)
     on_status(f"Notebook created with title: {title}")
-    add_source_button = _last_visible(page.locator(
-        'button[aria-label*="aggiungi fonte" i], '
-        'button[aria-label*="add source" i], '
-        'button.add-source-button'
-    ))
-    add_source_button.evaluate("button => button.click()")
-    page.wait_for_timeout(500)
-
-    upload_button = page.locator("button.drop-zone-icon-button").filter(
-        has_text=re.compile(r"carica.*file|upload.*file|file.*upload", re.I)
-    ).last
+    upload_button = _source_import_option(
+        page, re.compile(r"carica.*file|upload.*file|file.*upload", re.I)
+    )
     try:
         upload_button.wait_for(state="visible", timeout=10_000)
         # Intercept the native chooser at the click that opens it.  Looking for
@@ -691,51 +711,19 @@ def _start_audio_generation(page: Page, language: str, prompt: str | None, on_st
 
 
 def _save_download(page: Page, title: str, destination: Path, on_status: Callable[[str], None]) -> Path:
-    """Download to a private staging directory; caller publishes it only when complete."""
-    download_button = page.get_by_role("button", name=re.compile("download|scarica", re.I))
-    download_target = None
-    for index in range(download_button.count() - 1, -1, -1):
-        candidate = download_button.nth(index)
-        if candidate.is_visible():
-            download_target = candidate
-            break
-    if download_target is None:
-        more_button = page.locator("button.artifact-more-button").last
-        more_button.wait_for(state="visible", timeout=5_000)
-        more_button.click()
-        menu_item = page.get_by_role("menuitem", name=re.compile("download|scarica", re.I)).last
-        menu_item.wait_for(state="visible", timeout=5_000)
-        download_target = menu_item
-    with page.expect_download(timeout=30_000) as download_info:
-        on_status(f"Downloading audio: {title}")
-        download_target.click()
-    download = download_info.value
-    destination.mkdir(parents=True, exist_ok=True)
-    staging = destination / f".audio-overview-pending-{uuid4().hex}"
-    staging.mkdir()
-    output = staging / f"{_safe_filename(title)}.mp3"
-    download.save_as(output)
-    if not output.is_file() or output.stat().st_size == 0:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise NotebookLMError(f"Download MP3 non valido per: {title}")
-    return output
+    """Use the same audio-scoped download path for recovery and new jobs."""
+    return _save_ready_audio(page, title, destination, on_status)
 
 
 def _delete_notebook_by_title(page: Page, title: str, on_status: Callable[[str], None]) -> bool:
     """Delete one exact notebook as compensation for a failed creation flow."""
     page.goto("https://notebooklm.google.com/", wait_until="domcontentloaded")
-    page.wait_for_timeout(1_000)
-    list_view = page.get_by_role("button", name=re.compile("visualizzazione elenco|list view", re.I))
-    for index in range(list_view.count()):
-        candidate = list_view.nth(index)
-        try:
-            if candidate.is_visible() and candidate.is_enabled():
-                candidate.click(timeout=2_000)
-                page.wait_for_timeout(300)
-                break
-        except PlaywrightTimeoutError:
-            continue
+    _select_notebook_list_view(page)
     cells = page.locator('tr[role="row"] .project-table-title[title]')
+    try:
+        cells.first.wait_for(state="visible", timeout=30_000)
+    except PlaywrightTimeoutError:
+        return False
     # A timeout just after the title update can leave a successfully renamed
     # notebook behind.  Compensation must still find and delete that same item.
     candidate_titles = (title, _done_title(title))
@@ -843,10 +831,9 @@ def _wait_for_audio_ready(page: Page, title: str, on_status: Callable[[str], Non
     deadline = monotonic() + GENERATION_TIMEOUT_MS / 1_000
     while monotonic() < deadline:
         _raise_if_daily_limit(page)
-        audio_items = _artifact_items_with_icon(page, "audio_magic_eraser")
+        audio_items = _audio_overview_items(page)
         if audio_items:
-            details = " ".join(audio_items[-1].inner_text().split()).lower()
-            if not re.search(r"generazione.*in corso|generating|torna tra|come back", details, re.I):
+            if any(_audio_item_ready(item) for item in audio_items):
                 on_status(f"Audio Overview ready to download: {title}")
                 return
             on_status(f"Audio Overview generating: {title}. Checking again in 30 seconds…")
@@ -860,10 +847,17 @@ def _wait_for_audio_ready(page: Page, title: str, on_status: Callable[[str], Non
 
 def _save_ready_audio(page: Page, title: str, destination: Path, on_status: Callable[[str], None]) -> Path:
     """Download only the Audio Overview card, never another studio artifact."""
-    audio_items = _artifact_items_with_icon(page, "audio_magic_eraser")
+    # Navigation completes before the asynchronously loaded Studio library.
+    deadline = monotonic() + 30
+    audio_items = _audio_overview_items(page)
+    while not audio_items and monotonic() < deadline:
+        page.wait_for_timeout(250)
+        audio_items = _audio_overview_items(page)
     if not audio_items:
         raise NotebookLMError(f"Audio Overview was not found for download: {title}")
-    item = audio_items[-1]
+    item = next((item for item in reversed(audio_items) if _audio_item_ready(item)), None)
+    if item is None:
+        raise NotebookLMError(f"Audio Overview is still generating: {title}")
     download_target = None
     buttons = item.get_by_role("button", name=re.compile("download|scarica", re.I))
     for index in range(buttons.count() - 1, -1, -1):
@@ -872,7 +866,8 @@ def _save_ready_audio(page: Page, title: str, destination: Path, on_status: Call
             download_target = candidate
             break
     if download_target is None:
-        more = item.locator("button.artifact-more-button").last
+        item.hover()
+        more = item.locator('button.artifact-more-button, button[aria-haspopup="menu"]').last
         more.wait_for(state="visible", timeout=5_000)
         more.click()
         menu_item = page.get_by_role("menuitem", name=re.compile("download|scarica", re.I)).last
@@ -946,6 +941,7 @@ def process_url_to_completion(
                 raise
             except Exception as exc:
                 last_error = exc
+                _debug(page, output_dir / ".debug" / "import-failed" / _safe_filename(title))
                 if published_audio is not None:
                     # The local bundle is not a completed result until the
                     # corresponding notebook has been marked [DONE].  Remove
@@ -958,7 +954,7 @@ def process_url_to_completion(
                             raise NotebookLMError(f"Notebook to recreate was not found: {title}") from exc
                         _forget_notebook_job(url)
                     except Exception as cleanup_exc:
-                        raise NotebookLMError(f"Error for {title}; notebook cleanup failed: {cleanup_exc}") from exc
+                        raise NotebookLMError(f"Error for {title}; notebook cleanup failed: {cleanup_exc}; original error: {exc}") from exc
                 if attempt < MAX_CLEAN_RECREATION_ATTEMPTS:
                     report(f"Error for {title}; notebook removed. Clean recreation ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
             finally:
@@ -1039,8 +1035,9 @@ def process_file_to_completion(
                 raise
             except Exception as exc:
                 last_error = exc
+                _debug(page, output_dir / ".debug" / "import-failed" / _safe_filename(title))
                 if published_audio is not None:
-                    for path in (published_audio, published_audio.with_suffix(".txt"), published_audio.with_suffix(".md")):
+                    for path in (published_audio, published_audio.with_suffix(".txt"), published_audio.with_suffix(".md"), published_audio.with_suffix(".pdf")):
                         path.unlink(missing_ok=True)
                 if created:
                     try:
@@ -1048,7 +1045,7 @@ def process_file_to_completion(
                             raise NotebookLMError(f"Notebook to recreate was not found: {title}") from exc
                         _forget_notebook_job(job_key)
                     except Exception as cleanup_exc:
-                        raise NotebookLMError(f"Error for {file_path.name}; notebook cleanup failed: {cleanup_exc}") from exc
+                        raise NotebookLMError(f"Error for {file_path.name}; notebook cleanup failed: {cleanup_exc}; original error: {exc}") from exc
                 if attempt < MAX_CLEAN_RECREATION_ATTEMPTS:
                     report(f"Error for {file_path.name}; notebook removed. Clean recreation ({attempt + 1}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
             finally:
@@ -1117,6 +1114,8 @@ def download_ready_audios(
                         None,
                     )
                     if complete_audio is not None:
+                        if is_local_file:
+                            _copy_source_pdf(complete_audio, source_url)
                         _mark_notebook_done(page, title, report)
                         downloaded.append(complete_audio)
                         report(f"Files already complete; notebook updated: {title}")
@@ -1217,18 +1216,30 @@ def _open_notebook(page: Page, title: str, href: str | None) -> None:
 
 def _has_audio_overview(page: Page) -> bool:
     """Return whether the studio library contains a running or ready audio overview."""
-    audio_items = page.locator(
-        'artifact-library-item button[aria-description*="overview audio" i], '
-        'artifact-library-item button[aria-description*="audio overview" i], '
+    return bool(_audio_overview_items(page))
+
+
+def _audio_overview_items(page: Page) -> list:
+    # During generation the icon becomes progress_activity (previously sync).
+    # The accessible description identifies audio independently of that icon.
+    items = page.locator(
+        'artifact-library-item:has(button[aria-description*="overview audio" i]), '
+        'artifact-library-item:has(button[aria-description*="audio overview" i]), '
         'artifact-library-item:has(mat-icon:text-is("audio_magic_eraser"))'
     )
-    for index in range(audio_items.count()):
-        try:
-            if audio_items.nth(index).is_visible():
-                return True
-        except PlaywrightTimeoutError:
-            continue
-    return bool(_artifact_items_with_icon(page, "audio_magic_eraser"))
+    return [items.nth(index) for index in range(items.count()) if items.nth(index).is_visible()]
+
+
+def _audio_item_ready(item) -> bool:
+    details = " ".join(item.inner_text().split())
+    if re.search(r"generazione.*in corso|generating|torna tra|come back", details, re.I):
+        return False
+    if item.locator('mat-icon:text-is("progress_activity"), mat-icon:text-is("sync")').count():
+        return False
+    primary = item.locator('button.artifact-stretched-button, button[aria-description]').first
+    if primary.count() and not primary.is_enabled():
+        return False
+    return True
 
 
 def _artifact_items_with_icon(page: Page, icon_name: str) -> list:
@@ -1334,6 +1345,14 @@ def verify_audio_overviews(
             context.close()
 
 
+def _select_notebook_list_view(page: Page) -> None:
+    # The view toggle is a <button role="radio"> in current NotebookLM.
+    # Match its accessible label rather than assuming the button role.
+    list_view = page.get_by_label(re.compile("visualizzazione elenco|list view", re.I)).filter(visible=True)
+    list_view.first.wait_for(state="visible", timeout=30_000)
+    list_view.first.click(timeout=5_000)
+
+
 def delete_done_notebooks(
     profile_dir: Path, on_status: Callable[[str], None] | None = None,
 ) -> int:
@@ -1353,18 +1372,18 @@ def delete_done_notebooks(
             while True:
                 # NotebookLM exposes project actions reliably in the list view;
                 # in the grid view they may be hidden until a card is hovered.
-                list_view = page.get_by_role("button", name=re.compile("visualizzazione elenco|list view", re.I))
-                for index in range(list_view.count()):
-                    candidate = list_view.nth(index)
-                    try:
-                        if candidate.is_visible() and candidate.is_enabled():
-                            candidate.click(timeout=2_000)
-                            page.wait_for_timeout(300)
-                            break
-                    except PlaywrightTimeoutError:
-                        continue
+                _select_notebook_list_view(page)
                 title_cell = None
                 cells = page.locator('tr[role="row"] .project-table-title[title]')
+                # DOMContentLoaded only loads the app shell.  count() does not
+                # wait for the asynchronously fetched notebooks, so an empty
+                # snapshot after a reload must not end cleanup immediately.
+                try:
+                    cells.first.wait_for(state="visible", timeout=30_000)
+                except PlaywrightTimeoutError:
+                    if cells.count():
+                        raise
+                    break
                 for index in range(cells.count()):
                     candidate = cells.nth(index)
                     candidate_title = candidate.get_attribute("title") or ""

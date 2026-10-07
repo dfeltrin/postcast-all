@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from time import sleep
@@ -39,6 +41,8 @@ def _process_one(url: str, output_dir: Path) -> str:
         output_dir.mkdir(parents=True, exist_ok=True)
         audio_file = process_file_to_completion(file_path, output_dir, PROFILE_DIR, "Italian", None, on_status=_print)
         required = (audio_file, audio_file.with_suffix(".txt"))
+        if file_path.suffix.lower() == ".pdf":
+            required += (audio_file.with_suffix(".pdf"),)
         if not audio_file.is_file() or audio_file.stat().st_size == 0 or not all(path.is_file() for path in required[1:]):
             raise OSError(f"Output files are incomplete: the file remains in the queue ({file_path})")
         if not remove_url(url):
@@ -159,30 +163,22 @@ def _show_urls(path: Path, heading: str) -> None:
 
 
 def _pick_file() -> Path | None:
-    """Open the native file picker only when the user explicitly asks for it."""
-    root = None
+    """Wait for the picker process to exit before returning to the CLI."""
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        root.update_idletasks()
-        selection = filedialog.askopenfilename(
-            parent=root, title="Seleziona un file da aggiungere a NotebookLM"
+        result = subprocess.run(
+            [sys.executable, "-m", "news_to_audio.file_picker"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True,
         )
+        selection = json.loads(result.stdout)
+    except subprocess.CalledProcessError as exc:
+        _print(f"Unable to open the file picker: {exc.stderr.strip() or exc}")
+        return None
     except Exception as exc:
         _print(f"Unable to open the file picker: {exc}")
         return None
-    finally:
-        # Always tear down the hidden Tk owner window.  Leaving it alive can
-        # keep macOS's NSOpenPanel/Finder integration in a spinning modal state.
-        if root is not None:
-            try:
-                root.destroy()
-            except Exception:
-                pass
     return Path(selection) if selection else None
 
 

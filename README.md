@@ -7,7 +7,9 @@ has been downloaded successfully.
 - For a URL, it creates an MP3, TXT file (the source URL), and Markdown file
   (the extracted text).
 - For a local file, it creates an MP3 and TXT file (the file's absolute path);
-  it does not create Markdown.
+  it does not create Markdown. For a PDF, it also copies the original document
+  into the output directory during `/sync`, using the same name as the MP3
+  (including its date prefix and any numeric suffix), with a `.pdf` extension.
 
 ## Prerequisites
 

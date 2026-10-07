@@ -80,11 +80,16 @@ def test_local_file_bundle_does_not_create_markdown(tmp_path) -> None:
     staged_audio = staging / "Titolo.mp3"
     staged_audio.write_bytes(b"mp3 data")
 
+    source = tmp_path / "documento.PDF"
+    source.write_bytes(b"original pdf content")
+    (tmp_path / "Titolo.mp3").write_bytes(b"existing audio")
     audio = _publish_audio_bundle(
-        staged_audio, tmp_path, "Titolo", "/Users/example/documento.pdf", "", include_markdown=False
+        staged_audio, tmp_path, "Titolo", str(source), "", include_markdown=False
     )
 
-    assert audio.with_suffix(".txt").read_text() == "/Users/example/documento.pdf\n"
+    assert audio.name == "Titolo-2.mp3"
+    assert audio.with_suffix(".txt").read_text() == f"{source}\n"
+    assert audio.with_suffix(".pdf").read_bytes() == source.read_bytes()
     assert not audio.with_suffix(".md").exists()
     assert _is_complete_audio(audio, include_markdown=False)
 
