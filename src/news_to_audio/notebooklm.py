@@ -364,6 +364,37 @@ def _source_import_option(page: Page, name: re.Pattern):
     return option
 
 
+def _add_website(
+    page: Page, title: str, url: str, on_status: Callable[[str], None],
+    on_notebook_created: Callable[[], None] | None = None,
+) -> None:
+    """Import the URL through Websites, including YouTube transcript sources."""
+    on_status("Creating the notebook and importing the website URL…")
+    _click_first(page, ["new notebook", "nuovo notebook", "crea nuovo"])
+    if on_notebook_created:
+        on_notebook_created()
+    _raise_if_daily_limit(page)
+    _set_notebook_title(page, title)
+    on_status(f"Notebook created with title: {title}")
+    _source_import_option(
+        page, re.compile(r"^siti web$|^sito web$|^websites?$|^website urls?$", re.I)
+    ).click(timeout=10_000)
+    field_selector = (
+        'textarea[formcontrolname="urls"], '
+        'textarea[aria-label="Inserisci gli URL"], '
+        'textarea[aria-label="Enter URLs"]'
+    )
+    dialog = page.get_by_role("dialog").filter(visible=True).filter(
+        has=page.locator(field_selector)
+    ).last
+    dialog.wait_for(state="visible", timeout=20_000)
+    dialog.locator(field_selector).filter(visible=True).last.fill(url, timeout=20_000)
+    dialog.get_by_role(
+        "button", name=re.compile(r"^(insert|inserisci|add|aggiungi|import|importa)$", re.I)
+    ).click(timeout=20_000)
+    _wait_for_copied_text_ready(page, on_status)
+
+
 def _add_copied_text(
     page: Page, title: str, url: str, text: str, on_status: Callable[[str], None],
     on_notebook_created: Callable[[], None] | None = None,
@@ -385,10 +416,24 @@ def _add_copied_text(
         page, re.compile(r"^testo copiato$|^copied text$", re.I)
     )
     copied_text_button.click(timeout=10_000)
-    text_input = page.locator("textarea").filter(visible=True).last
+    # The chat and source-discovery textareas stay visible behind the modal.
+    # Wait for the actual paste form, which appears after a dialog animation.
+    paste_dialog = page.get_by_role("dialog").filter(visible=True).filter(
+        has=page.locator(
+            'textarea[formcontrolname="copiedText"], '
+            'textarea[aria-label="Testo incollato"], '
+            'textarea[aria-label="Pasted text"]'
+        )
+    ).last
+    paste_dialog.wait_for(state="visible", timeout=20_000)
+    text_input = paste_dialog.locator(
+        'textarea[formcontrolname="copiedText"], '
+        'textarea[aria-label="Testo incollato"], '
+        'textarea[aria-label="Pasted text"]'
+    ).filter(visible=True).last
     text_input.fill(f"Source: {url}\n\n{text[:TEXT_LIMIT]}", timeout=20_000)
     # Exact names avoid selecting the underlying Add sources button.
-    submit = page.get_by_role(
+    submit = paste_dialog.get_by_role(
         "button", name=re.compile(r"^(insert|inserisci|add|aggiungi|import|importa)$", re.I)
     ).filter(visible=True).last
     submit.click(timeout=20_000)
@@ -396,7 +441,7 @@ def _add_copied_text(
 
 
 def _wait_for_copied_text_ready(page: Page, on_status: Callable[[str], None]) -> None:
-    """Wait for NotebookLM to finish indexing a pasted-text source.
+    """Wait for NotebookLM to finish indexing an imported source.
 
     Clicking ``Inserisci`` only submits the text.  NotebookLM adds the source
     card before its indexing phase has necessarily completed, so a short fixed
@@ -426,7 +471,7 @@ def _wait_for_copied_text_ready(page: Page, on_status: Callable[[str], None]) ->
                 source_text = source.inner_text(timeout=1_000)
                 source_class = source.get_attribute("class") or ""
                 if failed.search(f"{source_text} {source_class}"):
-                    raise NotebookLMError("NotebookLM could not analyze the source text.")
+                    raise NotebookLMError("NotebookLM could not analyze the imported source.")
                 spinner_visible = source.locator(
                     "mat-spinner, mat-progress-spinner, .mat-mdc-progress-spinner, "
                     '[role="progressbar"], [aria-busy="true"], .loading-spinner, '
@@ -446,13 +491,13 @@ def _wait_for_copied_text_ready(page: Page, on_status: Callable[[str], None]) ->
                 # to its processing state.  Three clean reads avoid that race.
                 ready_checks += 1
                 if ready_checks >= 3:
-                    on_status("Text import and analysis completed.")
+                    on_status("Source import and analysis completed.")
                     return
         if not reported_wait:
             on_status("Waiting for NotebookLM to finish importing…")
             reported_wait = True
         page.wait_for_timeout(TEXT_SOURCE_PROCESSING_POLL_MS)
-    raise NotebookLMError("Text import or analysis did not complete within 20 minutes.")
+    raise NotebookLMError("Source import or analysis did not complete within 20 minutes.")
 
 
 def _add_local_file(
@@ -761,7 +806,7 @@ def start_audio_generation(
     title: str, url: str, text: str, output_dir: Path, profile_dir: Path, language: str, prompt: str | None,
     on_status: Callable[[str], None] | None = None,
 ) -> None:
-    """Create a notebook, import extracted text, and start generation without waiting."""
+    """Create a notebook, import its URL, and start generation without waiting."""
     title = normalize_title(title)
     profile_dir.mkdir(parents=True, exist_ok=True)
     record_source_url(output_dir, title, url, text)
@@ -798,7 +843,7 @@ def start_audio_generation(
                 _start_audio_generation(page, language, prompt, report)
                 _remember_notebook_job(url, target_title, "audio_started")
                 return
-            _add_copied_text(page, title, url, text, report, on_notebook_created=mark_notebook_created)
+            _add_website(page, title, url, report, on_notebook_created=mark_notebook_created)
             _start_audio_generation(page, language, prompt, report)
             _remember_notebook_job(url, title, "audio_started")
         except NotebookLMDailyLimitError as exc:
@@ -920,7 +965,7 @@ def process_url_to_completion(
             try:
                 report(f"Processing {title} to completion ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
                 _wait_for_signin_or_home(page, report)
-                _add_copied_text(page, title, url, text, report, on_notebook_created=mark_created)
+                _add_website(page, title, url, report, on_notebook_created=mark_created)
                 _start_audio_generation(page, language, prompt, report)
                 _wait_for_audio_ready(page, title, report)
                 staged_audio = _save_ready_audio(page, title, output_dir, report)
@@ -1379,7 +1424,7 @@ def delete_done_notebooks(
                 # wait for the asynchronously fetched notebooks, so an empty
                 # snapshot after a reload must not end cleanup immediately.
                 try:
-                    cells.first.wait_for(state="visible", timeout=30_000)
+                    cells.first.wait_for(state="visible", timeout=5_000)
                 except PlaywrightTimeoutError:
                     if cells.count():
                         raise

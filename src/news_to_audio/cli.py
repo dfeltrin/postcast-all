@@ -197,6 +197,33 @@ Available commands:
 """.strip())
 
 
+def _enqueue_url(value: str) -> None:
+    """Handle pasted URLs without interpreting their characters as shell syntax."""
+    url = value.strip()
+    if len(url) >= 2 and url[0] == url[-1] and url[0] in "\"'":
+        url = url[1:-1].strip()
+    if url.lower().startswith("www."):
+        url = "https://" + url
+    try:
+        parts = urlsplit(url)
+        valid = (
+            parts.scheme.lower() in {"http", "https"}
+            and bool(parts.hostname)
+            and not any(char.isspace() or ord(char) < 32 for char in url)
+        )
+        # Accessing port also validates malformed or out-of-range port numbers.
+        parts.port
+    except ValueError:
+        valid = False
+    if not valid:
+        _print("Invalid URL. Usage: /add https://example.com/article")
+        return
+    if add_url(url):
+        _print("URL added to the queue.")
+    else:
+        _print("URL is already in the queue.")
+
+
 def main() -> None:
     output_dir = load_output_dir()
     _print("Podcast All CLI")
@@ -210,18 +237,22 @@ def main() -> None:
         if not line:
             continue
         if not line.startswith("/"):
-            if line.startswith(("http://", "https://")):
-                if add_url(line):
-                    _print("URL added to the queue.")
-                else:
-                    _print("URL is already in the queue.")
-            else:
-                _print("Use a command beginning with / or enter a URL directly. Type /help.")
+            _enqueue_url(line)
+            continue
+        raw_parts = line[1:].split(maxsplit=1)
+        if not raw_parts:
+            _print("Unknown command. Type /help.")
+            continue
+        if raw_parts[0].lower() in {"add", "a"}:
+            _enqueue_url(raw_parts[1] if len(raw_parts) > 1 else "")
             continue
         try:
             parts = shlex.split(line[1:])
         except ValueError as exc:
             _print(f"Comando non valido: {exc}")
+            continue
+        if not parts:
+            _print("Unknown command. Type /help.")
             continue
         command, *arguments = parts
         command = command.lower()
@@ -240,13 +271,6 @@ def main() -> None:
             return
         if command in {"help", "?"}:
             _help()
-        elif command == "add":
-            if len(arguments) != 1 or not arguments[0].startswith(("http://", "https://")):
-                _print("Usage: /add https://example.com/article")
-            elif add_url(arguments[0]):
-                _print("URL added to the queue.")
-            else:
-                _print("URL is already in the queue.")
         elif command == "addfile":
             if arguments:
                 _print("Usage: /addfile")

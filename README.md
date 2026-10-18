@@ -54,6 +54,10 @@ Main commands:
 - `/rejected`: shows URLs that were automatically rejected.
 - `/output [directory]` or `/o [directory]`: displays or sets the output directory.
 
+You can also paste a URL directly at the prompt. Addresses starting with `www.`
+automatically use HTTPS. URL characters such as apostrophes, `&`, and `#` are
+preserved; invalid addresses are rejected before entering the queue.
+
 With `/addfile`, the file is saved to the queue alongside URLs rather than
 being sent to NotebookLM immediately. During `/sync`, it is uploaded only when
 its turn is reached. The app waits for the upload and analysis to finish
@@ -73,3 +77,7 @@ Login- or paywall-protected content is not bypassed.
 
 Interaction with NotebookLM takes place in the browser. On error, screenshots
 and HTML are saved to `output/.debug`.
+
+URLs are imported through **Add sources → Websites → Enter URLs**, including
+YouTube links. The app waits for NotebookLM to analyze the source before starting
+the Audio Overview.
