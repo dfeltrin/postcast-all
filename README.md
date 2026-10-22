@@ -179,10 +179,40 @@ and deletion diagnostics use `AudioOverview/.debug`; some failures also write
 `notebooklm-error.txt`. NotebookLM interaction uses browser automation, so changes
 to its interface can require updates to the app.
 
-Generated output, source metadata, browser profiles, and debug captures are local
-data and must not be committed or included in shared archives. Debug captures can
-contain account details and authenticated page data. Review any custom output
-directory before sharing it.
+## Privacy and sharing
+
+The application keeps Google sessions, source documents, and diagnostic captures
+on your machine. The repository ignores these local files:
+
+| Ignored path | Private data it may contain |
+| --- | --- |
+| `state/` | Browser sessions, queued URLs, absolute file paths, extracted source text, and job metadata. |
+| `AudioOverview/` and `output/` | Generated audio, source references, copied documents, and recovery metadata. |
+| Any `.debug/` directory | Screenshots and HTML with account details, notebook contents, and authenticated page data. |
+| `.env` and `.env.*` | Local credentials and configuration; `.env.example` is allowed and must contain placeholders only. |
+
+Custom output directories are not automatically excluded in full. Keep them
+outside the repository or add their paths to `.gitignore`. The `.debug/`
+exclusion still applies inside custom output directories in the repository.
+
+Before committing, inspect `git status --short` and `git diff --cached`.
+Ignore rules do not remove files that Git already tracks, and they do not apply
+when copying a folder or creating a ZIP with a file manager.
+
+To share only the committed project files, export an archive outside the
+repository:
+
+```bash
+git archive --format=zip --output=../podcast-all-source.zip HEAD
+```
+
+Review the tracked files before exporting. Do not include browser profiles,
+debug captures, generated output, or the `.git` directory in shared archives.
+
+Repository history has been rewritten to remove previously committed local
+artifacts. If you have a clone from before that cleanup, preserve any local work
+separately and make a fresh clone before contributing. Old clones and existing
+archives may still contain the removed data.
 
 ## Development checks
 
