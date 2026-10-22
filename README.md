@@ -179,6 +179,11 @@ and deletion diagnostics use `AudioOverview/.debug`; some failures also write
 `notebooklm-error.txt`. NotebookLM interaction uses browser automation, so changes
 to its interface can require updates to the app.
 
+Generated output, source metadata, browser profiles, and debug captures are local
+data and must not be committed or included in shared archives. Debug captures can
+contain account details and authenticated page data. Review any custom output
+directory before sharing it.
+
 ## Development checks
 
 Run the automated tests without interacting with a live NotebookLM account:

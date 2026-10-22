@@ -4,3 +4,9 @@
 __pycache__/
 output/
 state/
+AudioOverview/
+**/.debug/
+.DS_Store
+.env
+.env.*
+!.env.example
