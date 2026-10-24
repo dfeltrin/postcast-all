@@ -806,7 +806,7 @@ def start_audio_generation(
     title: str, url: str, text: str, output_dir: Path, profile_dir: Path, language: str, prompt: str | None,
     on_status: Callable[[str], None] | None = None,
 ) -> None:
-    """Create a notebook, import its URL, and start generation without waiting."""
+    """Create a notebook, import extracted text, and start generation without waiting."""
     title = normalize_title(title)
     profile_dir.mkdir(parents=True, exist_ok=True)
     record_source_url(output_dir, title, url, text)
@@ -843,7 +843,7 @@ def start_audio_generation(
                 _start_audio_generation(page, language, prompt, report)
                 _remember_notebook_job(url, target_title, "audio_started")
                 return
-            _add_website(page, title, url, report, on_notebook_created=mark_notebook_created)
+            _add_copied_text(page, title, url, text, report, on_notebook_created=mark_notebook_created)
             _start_audio_generation(page, language, prompt, report)
             _remember_notebook_job(url, title, "audio_started")
         except NotebookLMDailyLimitError as exc:
@@ -965,7 +965,7 @@ def process_url_to_completion(
             try:
                 report(f"Processing {title} to completion ({attempt}/{MAX_CLEAN_RECREATION_ATTEMPTS})…")
                 _wait_for_signin_or_home(page, report)
-                _add_website(page, title, url, report, on_notebook_created=mark_created)
+                _add_copied_text(page, title, url, text, report, on_notebook_created=mark_created)
                 _start_audio_generation(page, language, prompt, report)
                 _wait_for_audio_ready(page, title, report)
                 staged_audio = _save_ready_audio(page, title, output_dir, report)

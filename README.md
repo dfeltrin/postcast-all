@@ -4,6 +4,8 @@ Local terminal app for creating and downloading NotebookLM Audio Overviews from
 public URLs and local files. URLs and files share a persistent queue; each item
 is removed only after a non-empty MP3 and all required companion files are saved.
 Audio generation is requested in **Italian**.
+For URLs, the app extracts the page content locally and sends the extracted text
+to NotebookLM as a **Copied text** source.
 
 ## Prerequisites
 
@@ -96,9 +98,24 @@ The initial check and cleanup apply to existing notebooks visible to the signed-
 account, including notebooks outside the local queue. The `[DONE]` prefix is the
 deletion criterion; cleanup does not recheck local output files before deletion.
 
-URLs are imported through **Add sources → Websites → Enter URLs**. This import
-route also accepts YouTube links, but queued URLs must first pass the app's own
-HTTP download and text extraction. YouTube transcript extraction is not implemented.
+### URL extraction and text import
+
+For each queued URL, the app:
+
+1. Downloads the source and extracts its text locally (scraping HTML pages).
+2. Creates a notebook and opens **Add sources → Copied text**
+   (**Aggiungi fonti → Testo copiato** in the Italian interface).
+3. Pastes the original URL as a reference, followed by the extracted text.
+4. Waits for NotebookLM to finish analyzing the text before starting the Audio
+   Overview in Italian.
+
+NotebookLM receives the extracted content directly; the app does not submit the
+URL through the **Websites** import option. Imported text is limited to the first
+300,000 characters, while the `.md` companion file preserves the full extracted
+text. YouTube transcript extraction is not implemented.
+
+### Local file import
+
 Local files are uploaded only when their queue position is reached; the app waits
 for upload and analysis, including any spinner, before starting audio generation.
 
